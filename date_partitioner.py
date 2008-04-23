@@ -131,10 +131,12 @@ class DatePartitioner(DBScript):
         idx_count = 0
         for idx_tup in get_index_defs(self.curs, self.table_name):
             idx_count += 1
-            idxs_sql += idx_tup[0].replace(idx_tup[1], idx_tup[1]+'_%s_%s').replace(' '+self.table_name+' ', ' %s ')+'; '
+            idxs_sql += idx_tup[0].replace(self.table_name, self.table_name+'_%s_%s')+'; '
         
         dates = (self.opts.start_ts, self.nextInterval(self.opts.units, self.opts.start_ts)[0])
         while True:
+            if dates[0] > self.opts.end_ts:
+                break
             try:
                 if self.opts.ignore_errors:
                     self.curs.execute('SAVEPOINT save;')
@@ -145,7 +147,7 @@ class DatePartitioner(DBScript):
                         (part_table, constraints, self.ts_column, 
                          dates[0], self.ts_column, dates[1], self.table_name))
                          
-                self.curs.execute(idxs_sql % ((dates[0], dates[1], part_table)*idx_count))
+                self.curs.execute(idxs_sql % ((dates[0], dates[1])*idx_count*2))
             except psycopg2.ProgrammingError, e:
                 print e,
                 if not self.opts.ignore_errors:
@@ -153,8 +155,7 @@ class DatePartitioner(DBScript):
                     sys.exit(1)
                 print 'Ignoring error.'
                 self.curs.execute('ROLLBACK TO SAVEPOINT save;')
-            if dates[1] > self.opts.end_ts:
-                break
+                
             dates = (dates[1], self.nextInterval(self.opts.units, dates[1])[0])
     
     def set_trigger_func(self):

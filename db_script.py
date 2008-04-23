@@ -12,7 +12,7 @@ from optparse import OptionParser
 def default_db_user():
     return os.environ.get('PGUSER', os.environ['USER'])
 
-def default_db_name():
+def default_db_dbname():
     return os.environ.get('PGDATABASE', os.environ['USER'])
 
 def default_db_port():
@@ -22,7 +22,7 @@ def default_db_host():
     return os.environ.get('PGHOSTADDR', os.environ.get('PGHOST', 'localhost'))
 
 def default_db_str():
-    return "dbname=%s user=%s host=%s port=%s" % (default_db_name(), default_db_user(), 
+    return "dbname=%s user=%s host=%s port=%s" % (default_db_dbname(), default_db_user(), 
                                                     default_db_host(), default_db_port())
         
 class DBScript(object):
