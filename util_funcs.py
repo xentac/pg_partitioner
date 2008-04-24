@@ -92,7 +92,7 @@ def normalize_date(curs, date_str, fmt, diff='0 months'):
     '''
     normalize_date_sql = \
     '''
-    SELECT to_char(%s::timestamp + %s, %s);
+    SELECT to_char(date_trunc('month', %s::timestamp + %s), %s);
     '''
     curs.execute(normalize_date_sql, (date_str, diff, fmt))
     return curs.fetchone()[0]

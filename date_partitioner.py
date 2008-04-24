@@ -164,7 +164,8 @@ class DatePartitioner(DBScript):
         for the parent table if it's not already there
         '''
 
-        funcs_sql = open('date_part_trig.tpl.sql').read()
+        tpl_path = os.path.dirname(os.path.realpath(__file__))
+        funcs_sql = open(tpl_path+'/date_part_trig.tpl.sql').read()
         table_atts = table_attributes(self.curs, self.table_name)
         d = {'table_name': self.table_name,
              'ts_column': self.ts_column,
@@ -207,7 +208,9 @@ class DatePartitioner(DBScript):
             if self.curs.rowcount < 100:
                 break
             d['offset'] += 100;
-        print 'Moved %d rows into partitions.' % moved
+        
+        all_moved = '' if keep else '(all) '
+        print 'Moved %d %srows into partitions.' % (moved, all_moved)
         
         self.curs.execute('TRUNCATE %s;' % self.table_name)
         
