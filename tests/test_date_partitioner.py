@@ -4,6 +4,7 @@ import sys, os, subprocess
 from copy import copy
 
 def setUpModule():
+    os.chdir(os.path.dirname(__file__))
     dbtestcase.setUpSampleDB('dateparttest')
 
 def tearDownModule():
@@ -144,7 +145,15 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
         self.assertEqual(output.count('relation "foo_20080201_20080301" already exists'), 1)
         self.assertEqual(output.count('Ignoring error.'), 2)
+    
+    def testExistingTableCreateFailsWithNoIgnoreFlag(self):
+        cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
+        self.callproc(cmd)
         
+        cmd = script+" -u month -s 20080115 -e 20080513 foo val_ts"
+        sts, p = self.callproc(cmd)
         
-        
+        output = p.stdout.read()
+        self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
+        self.failUnlessRaises(self.failureException, self.runTableValidations, cmd, '20080101', '20080501', '1 month')
         
