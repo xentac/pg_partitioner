@@ -28,7 +28,7 @@ BEGIN
             RETURN NULL;
         END IF;
     END LOOP;
-    RAISE WARNING 'No partition created for %(table_name)s to hold value %%, leaving data in parent table.', rec.%(ts_column)s;
+    RAISE WARNING 'No partition created for %(table_name)s to hold value %(col_type)s %%, leaving data in parent table.', rec.%(ts_column)s;
     RETURN rec;
 END;
 $$ language plpgsql;

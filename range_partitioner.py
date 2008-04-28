@@ -189,7 +189,7 @@ class DatePartitioner(DBScript):
         '''
 
         tpl_path = os.path.dirname(os.path.realpath(__file__))
-        funcs_sql = open(tpl_path+'/date_part_trig.tpl.sql').read()
+        funcs_sql = open(tpl_path+'/range_part_trig.tpl.sql').read()
         table_atts = table_attributes(self.curs, self.table_name)
         d = {'table_name': self.table_name,
              'ts_column': self.ts_column,
