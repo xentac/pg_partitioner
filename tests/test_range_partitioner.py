@@ -14,7 +14,7 @@ script = "../range_partitioner.py --db dbname=dateparttest"
 
 class TestDatePartitioner(dbtestcase.DBTestCase):
     def setUp(self):
-        sql = \
+        parent_sql = \
         '''
         DROP TABLE IF EXISTS foo CASCADE;
 
@@ -31,10 +31,13 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
 
         INSERT INTO foo (val, val_ts) VALUES (3, '20070703'::timestamp), (5, '20080101'), (6, '2007-11-15'), (10, now()), (15, '20080504'), (5, '2008-02-02'), (23, '20090101');
         '''
+        default_schema_sql = 'SELECT current_schema();'
         self.part_fmt = 'foo_%s_%s'
         self.transactional = False
         self.connect('dbname=dateparttest')
-        self.exec_query(sql)
+        self.exec_query(parent_sql)
+        self.exec_query(default_schema_sql)
+        self.default_schema = self.cursor().fetchone()[0]
         self._commit()
     
     def tearDown(self):
@@ -59,7 +62,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         
         dates = start_date, self.nextInterval(date_units, start_date)
         while dates[0] <= end_date:
-            part = self.part_fmt % dates
+            part = self.default_schema+'.'+(self.part_fmt % dates)
             self.assertTableExists(part)
             self.assertNotEqual(output.find('Creating '+part), -1)
             dates = dates[1], self.nextInterval(date_units, dates[1])
@@ -193,7 +196,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         output = p.stdout.read()
         dates = '20070701', self.nextInterval('1 month', '20070701')
         while dates[0] <= '20090101':
-            part = self.part_fmt % dates
+            part = self.default_schema+'.'+(self.part_fmt % dates)
             self.assertTableNotExists(part)
             self.assertNotEqual(output.find('Creating '+part), -1) # still prints creation notices
             dates = dates[1], self.nextInterval('1 month', dates[1])

@@ -14,8 +14,9 @@ DECLARE
 BEGIN
     FOR partition IN
         SELECT relname
-        FROM pg_class
-        WHERE relname ~ ('^%(table_name)s_[0-9]+_[0-9]+$')
+        FROM pg_class t, pg_namespace n
+        WHERE n.oid=t.relnamespace 
+            AND nspname || '.' || relname ~ ('^%(table_name)s_[0-9]+_[0-9]+$')
         ORDER BY relname
     LOOP
         name_parts := string_to_array(partition, '_');
@@ -45,22 +46,5 @@ BEGIN
         RETURN NEW;
     END IF;
     RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION create_part_ins_trig(table_name varchar)
-    RETURNS void AS $$
-BEGIN
-    EXECUTE 'CREATE TRIGGER ' || table_name || '_partition_trigger BEFORE INSERT ON '
-            || table_name || ' FOR EACH ROW EXECUTE PROCEDURE ' || table_name || '_ins_trig();';
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION drop_part_ins_trig(table_name varchar)
-    RETURNS void AS $$
-DECLARE
-    str varchar;
-BEGIN
-    EXECUTE 'DROP TRIGGER IF EXISTS ' || table_name || '_partition_trigger ON ' || quote_ident(table_name) || ';';
 END;
 $$ LANGUAGE plpgsql;

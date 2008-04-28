@@ -15,15 +15,6 @@ CREATE TABLE %s (
 ) INHERITS (%s);
 '''
 
-dates_by_count_sql = \
-'''
-SELECT to_char('%s'::timestamp + ('%s'::timestamp - '%s'::timestamp)*g.i/%d, 'YYYYMMDD') as ts
-FROM generate_series(0, %d) g(i)
-UNION
-SELECT '%s' as ts
-ORDER BY ts;
-'''
-
 def_dates_sql = \
 '''
 SELECT to_char(date_trunc('%s', MIN(%s)), 'YYYYMMDD'), to_char(date_trunc('%s', MAX(%s)), 'YYYYMMDD')
@@ -39,14 +30,14 @@ FROM %s;
 trig_check_sql = \
 '''
 SELECT 1
-FROM pg_class c, pg_trigger t
-WHERE c.oid=t.tgrelid
-    AND c.relname='%s' AND t.tgname='%s_partition_trigger';
+FROM pg_trigger t
+WHERE t.tgrelid='%(table_name)s'::regclass
+    AND t.tgname='%(base_table_name)s_partition_trigger';
 '''
 
 create_trig_sql = \
 '''
-CREATE TRIGGER %(table_name)s_partition_trigger BEFORE INSERT OR UPDATE
+CREATE TRIGGER %(base_table_name)s_partition_trigger BEFORE INSERT OR UPDATE
     ON %(table_name)s FOR EACH ROW
     EXECUTE PROCEDURE %(table_name)s_ins_trig();
 '''
@@ -62,7 +53,13 @@ class DatePartitioner(DBScript):
     def __init__(self, args):
         super(DatePartitioner, self).__init__('DatePartitioner', args)
         
-        self.table_name = self.args[0]
+        if self.args[0].find('.') > -1:
+            self.table_name = self.args[0]
+            self.base_table_name = self.args[0].split('.')[1]
+        else:            
+            self.curs.execute('SELECT current_schema()')
+            self.table_name = self.curs.fetchone()[0]+'.'+self.args[0]
+            self.base_table_name = self.args[0]
         self.ts_column = self.args[1]
     
     def init_optparse(self):
@@ -102,7 +99,6 @@ class DatePartitioner(DBScript):
         if not self.col_type:
             self.parser.error("%s does not exist on %s." % (self.args[1], self.args[0]))
         self.set_range_vars()
-        print self.opts
         # self.opts.create = False
         # if self.opts.units or self.opts.count > 1 or self.opts.start or self.opts.end:
         #     self.opts.create = True
@@ -124,9 +120,10 @@ class DatePartitioner(DBScript):
             self.opts.start = res[0]
         
         if self.short_type == 'ts':
-            self.opts.start = normalize_date(self.curs, self.opts.start, 'YYYYMMDD')
+            self.opts.start = normalize_date(self.curs, self.opts.start, 'YYYYMMDD', units)
             self.opts.units = str(self.opts.scale) + ' ' + units
         elif self.short_type == 'int':
+            self.opts.start = units * (self.opts.start/units)
             self.opts.units = str(self.opts.scale * units)
         
         self.opts.end = self.opts.end or res[1]
@@ -155,7 +152,7 @@ class DatePartitioner(DBScript):
         idx_count = 0
         for idx in get_index_defs(self.curs, self.table_name):
             idx_count += 1
-            idxs_sql += idx.replace(self.table_name, self.table_name+'_%s_%s')+'; '
+            idxs_sql += idx.replace(self.base_table_name, self.base_table_name+'_%s_%s')+'; '
         
         end_points = (self.opts.start, self.nextInterval(self.opts.start))
         while True:
@@ -170,7 +167,7 @@ class DatePartitioner(DBScript):
                 self.curs.execute(create_part_sql % 
                         (part_table, constraints, self.ts_column, 
                          end_points[0], self.ts_column, end_points[1], self.table_name))
-                         
+                
                 self.curs.execute(idxs_sql % ((end_points[0], end_points[1])*idx_count*2))
             except psycopg2.ProgrammingError, e:
                 print e,
@@ -192,6 +189,7 @@ class DatePartitioner(DBScript):
         funcs_sql = open(tpl_path+'/range_part_trig.tpl.sql').read()
         table_atts = table_attributes(self.curs, self.table_name)
         d = {'table_name': self.table_name,
+             'base_table_name': self.base_table_name,
              'ts_column': self.ts_column,
              'table_atts': ','.join(table_atts),
              'atts_vals': " || ',' || ".join(["quote_nullable(rec.%s)" % att for att in table_atts]),
@@ -199,9 +197,9 @@ class DatePartitioner(DBScript):
         }
         self.curs.execute(funcs_sql % d)
             
-        self.curs.execute(trig_check_sql % ((self.table_name,)*2))
+        self.curs.execute(trig_check_sql % d)
         if not self.curs.fetchone():
-            self.curs.execute('SELECT create_part_ins_trig(%(table_name)s)', d)
+            self.curs.execute(create_trig_sql % d)
     
     def move_data_down(self):
         '''
@@ -209,11 +207,12 @@ class DatePartitioner(DBScript):
         We then DELETE everything touched and, after the loop, re-insert data that couldn't be moved.
         '''
         d = {'table_name': self.table_name,
+             'base_table_name': self.base_table_name,
              'ts_column': self.ts_column,
              'offset': 0
             }
-            
-        self.curs.execute(trig_check_sql % ((self.table_name,)*2))
+        
+        self.curs.execute(trig_check_sql % d)
         if not self.curs.fetchone():
             print '%s is not partitioned.' % self.table_name
             sys.exit(1)
