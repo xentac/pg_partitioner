@@ -15,20 +15,20 @@ BEGIN
     FOR partition IN
         SELECT relname
         FROM pg_class
-        WHERE relname ~ ('^%(table_name)s_[0-9]{8}_[0-9]{8}$')
+        WHERE relname ~ ('^%(table_name)s_[0-9]+_[0-9]+$')
         ORDER BY relname
     LOOP
         name_parts := string_to_array(partition, '_');
         upper_dim := array_upper(name_parts, 1);
-        IF rec.%(ts_column)s >= name_parts[upper_dim-1]::timestamp 
-                AND rec.%(ts_column)s < name_parts[upper_dim]::timestamp THEN
+        IF rec.%(ts_column)s >= name_parts[upper_dim-1]::%(col_type)s 
+                AND rec.%(ts_column)s < name_parts[upper_dim]::%(col_type)s THEN
             ins_sql := 'INSERT INTO %(table_name)s_' || name_parts[upper_dim-1] || '_' || 
                         name_parts[upper_dim] || ' (%(table_atts)s) VALUES (' || %(atts_vals)s || ');';
             EXECUTE ins_sql;
             RETURN NULL;
         END IF;
     END LOOP;
-    RAISE WARNING 'No partition created for %(table_name)s to hold timestamp value %%, leaving data in parent table.', rec.%(ts_column)s;
+    RAISE WARNING 'No partition created for %(table_name)s to hold value %%, leaving data in parent table.', rec.%(ts_column)s;
     RETURN rec;
 END;
 $$ language plpgsql;

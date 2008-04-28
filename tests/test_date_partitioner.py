@@ -81,7 +81,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
 
     
     def testCreates3MonthRangesOnExistingData(self):
-        cmd = script+" -u month -c 3 foo val_ts"
+        cmd = script+" -u month --scale 3 foo val_ts"
         self.runTableValidations(cmd, '20070701', '20090101', '3 month')
     
     def testCreatesRangesWithSetEndTs(self):

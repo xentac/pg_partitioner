@@ -11,7 +11,7 @@ create_part_sql = \
 '''
 CREATE TABLE %s (
     %s
-    CHECK (%s >= '%s'::timestamp AND %s < '%s'::timestamp)
+    CHECK (%s >= '%s' AND %s < '%s')
 ) INHERITS (%s);
 '''
 
@@ -98,8 +98,8 @@ class DatePartitioner(DBScript):
         if not table_exists(self.curs, self.args[0]):
             self.parser.error("%s does not exist in the given database." % self.args[0])
         
-        self.part_type = get_column_type(self.curs, self.args[0], self.args[1])
-        if not self.part_type:
+        self.col_type = get_column_type(self.curs, self.args[0], self.args[1])
+        if not self.col_type:
             self.parser.error("%s does not exist on %s." % (self.args[1], self.args[0]))
         self.set_range_vars()
         print self.opts
@@ -108,12 +108,12 @@ class DatePartitioner(DBScript):
         #     self.opts.create = True
     
     def set_range_vars(self):
-        if self.part_type == 'date' or self.part_type.find('time') > -1:
-            col_type = 'ts'
+        if self.col_type == 'date' or self.col_type.find('time') > -1:
+            self.short_type = 'ts'
             units = self.opts.units or 'month'
             self.curs.execute(def_dates_sql % (units, self.args[1], units, self.args[1], self.args[0]))
-        elif self.part_type.find('int') > -1:
-            col_type = 'int'
+        elif self.col_type.find('int') > -1:
+            self.short_type = 'int'
             units = self.opts.units or 1
             self.curs.execute(def_ints_sql % (units, self.args[1], units, units, self.args[1], units, self.args[0]))
         
@@ -123,21 +123,23 @@ class DatePartitioner(DBScript):
                 self.parser.error("No data in table to use for default dates, you'll need to specify explicit dates if you want to partition this table.")
             self.opts.start = res[0]
         
-        if col_type == 'ts':
+        if self.short_type == 'ts':
             self.opts.start = normalize_date(self.curs, self.opts.start, 'YYYYMMDD')
             self.opts.units = str(self.opts.scale) + ' ' + units
-        elif col_type == 'int':
+        elif self.short_type == 'int':
             self.opts.units = str(self.opts.scale * units)
         
         self.opts.end = self.opts.end or res[1]
         
-    def nextInterval(self, interval, *args):
-        fmt = "to_char('%s'::timestamp + '%s', 'YYYYMMDD')"
-        sql = 'SELECT '+','.join([fmt % (arg, interval) for arg in args])
-        self.curs.execute(sql)
-        return self.curs.fetchone()
+    def nextInterval(self, val):
+        if self.short_type == 'ts':
+            sql = "SELECT to_char(%s::timestamp + %s, 'YYYYMMDD')"
+            self.curs.execute(sql, (val, self.opts.units))
+            return self.curs.fetchone()[0]
+        elif self.short_type == 'int':
+            return str(int(val) + int(self.opts.units))
         
-    def create_partitions(self, dates):
+    def create_partitions(self):
         '''
         Create the child partitions, bails out if it encounters a partition
         that already exists
@@ -155,21 +157,21 @@ class DatePartitioner(DBScript):
             idx_count += 1
             idxs_sql += idx.replace(self.table_name, self.table_name+'_%s_%s')+'; '
         
-        dates = (self.opts.start, self.nextInterval(self.opts.units, self.opts.start)[0])
+        end_points = (self.opts.start, self.nextInterval(self.opts.start))
         while True:
-            if dates[0] > self.opts.end:
+            if int(end_points[0]) > int(self.opts.end):
                 break
             try:
                 if self.opts.ignore_errors:
                     self.curs.execute('SAVEPOINT save;')
                     
-                part_table = '%s_%s_%s' % (self.table_name, dates[0], dates[1])
+                part_table = '%s_%s_%s' % (self.table_name, end_points[0], end_points[1])
                 print 'Creating ' + part_table
                 self.curs.execute(create_part_sql % 
                         (part_table, constraints, self.ts_column, 
-                         dates[0], self.ts_column, dates[1], self.table_name))
+                         end_points[0], self.ts_column, end_points[1], self.table_name))
                          
-                self.curs.execute(idxs_sql % ((dates[0], dates[1])*idx_count*2))
+                self.curs.execute(idxs_sql % ((end_points[0], end_points[1])*idx_count*2))
             except psycopg2.ProgrammingError, e:
                 print e,
                 if not self.opts.ignore_errors:
@@ -178,7 +180,7 @@ class DatePartitioner(DBScript):
                 print 'Ignoring error.'
                 self.curs.execute('ROLLBACK TO SAVEPOINT save;')
                 
-            dates = (dates[1], self.nextInterval(self.opts.units, dates[1])[0])
+            end_points = (end_points[1], self.nextInterval(end_points[1]))
     
     def set_trigger_func(self):
         '''
@@ -193,7 +195,7 @@ class DatePartitioner(DBScript):
              'ts_column': self.ts_column,
              'table_atts': ','.join(table_atts),
              'atts_vals': " || ',' || ".join(["quote_nullable(rec.%s)" % att for att in table_atts]),
-             # 'nulls': '('+','.join(['null']*len(table_atts))+')'
+             'col_type': self.col_type
         }
         self.curs.execute(funcs_sql % d)
             
@@ -247,13 +249,9 @@ class DatePartitioner(DBScript):
             self.opts.create = True
             if self.opts.create:
                 self.set_trigger_func()
-                # build the dates ranges lists
-                args = [self.curs, self.opts.start, self.opts.end]
-                args.append(self.opts.units)
-                dates = list(get_dates_by_unit(*args))
         
                 # build the partitions
-                self.create_partitions(dates)
+                self.create_partitions()
                 
             if self.opts.migrate:
                 self.move_data_down()
