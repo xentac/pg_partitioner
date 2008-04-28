@@ -30,6 +30,12 @@ SELECT to_char(date_trunc('%s', MIN(%s)), 'YYYYMMDD'), to_char(date_trunc('%s', 
 FROM %s;
 '''
 
+def_ints_sql = \
+'''
+SELECT %s * (MIN(%s)/%s), %s * (MAX(%s)/%s) 
+FROM %s;
+'''
+
 trig_check_sql = \
 '''
 SELECT 1
@@ -60,20 +66,20 @@ class DatePartitioner(DBScript):
         self.ts_column = self.args[1]
     
     def init_optparse(self):
-        usage = "%prog [options] TABLE DATE_FIELD"
+        usage = "%prog [options] TABLE PARTITION_FIELD"
         parser = super(DatePartitioner, self).init_optparse(usage)
         
         g = OptionGroup(parser, "Partitioning options", 
                         "Ways to customize the number of partitions and/or the range of each.  Nothing is created if none of these is used.  This is useful for making table paritioning a two step process: 1. Create the partitions using the below options.  2. Migrate the data from the parent table into the new partitions using the above -m option.")
-        g.add_option('-u', '--units', dest="units",
-                     help="A valid PG interval unit.")
-        g.add_option('-c', '--count', type='int',
+        g.add_option('-u', '--units', dest="units", metavar='UNIT',
+                     help="A valid PG unit for the column partitioned on. Defaults to month for timestamp/date columns and 1 for integer column types")
+        g.add_option('--scale', type='int', metavar='COUNT',
                      default=1,
-                     help="The number of partitions to create. Or, if used with --units the number of UNITS per partition.")
-        g.add_option('-s', '--start_ts', 
+                     help="A 'scale factor' for the units.  The resulting range of values per partition created is scale * units.  The default is 1.")
+        g.add_option('-s', '--start', 
                      help="A valid date string for the start date for the partitions. If used with --units this will default to the oldest DATE_FIELD value in the table truncated to --units, else will truncate to day.")
-        g.add_option('-e', '--end_ts', 
-                     help="A valid date string for the end date of the partitions.Using --unit will force this be rounded to the nearest --unit value based from --start_ts after --end_ts. Defaults to the current date.")
+        g.add_option('-e', '--end', 
+                     help="A valid date string for the end date of the partitions.Using --unit will force this be rounded to the nearest --unit value based from --start after --end. Defaults to the current date.")
         g.add_option('-i', '--ignore_errors', action="store_true", default=False,
                      help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
         g.add_option('-m', '--migrate', action="store_true", default=False,
@@ -92,29 +98,39 @@ class DatePartitioner(DBScript):
         if not table_exists(self.curs, self.args[0]):
             self.parser.error("%s does not exist in the given database." % self.args[0])
         
-        if not table_has_column(self.curs, self.args[0], self.args[1]):
-            self.parser.error("%s does not exist on %s or is not a date type column." % (self.args[1], self.args[0]))
+        self.part_type = get_column_type(self.curs, self.args[0], self.args[1])
+        if not self.part_type:
+            self.parser.error("%s does not exist on %s." % (self.args[1], self.args[0]))
+        self.set_range_vars()
+        print self.opts
+        # self.opts.create = False
+        # if self.opts.units or self.opts.count > 1 or self.opts.start or self.opts.end:
+        #     self.opts.create = True
+    
+    def set_range_vars(self):
+        if self.part_type == 'date' or self.part_type.find('time') > -1:
+            col_type = 'ts'
+            units = self.opts.units or 'month'
+            self.curs.execute(def_dates_sql % (units, self.args[1], units, self.args[1], self.args[0]))
+        elif self.part_type.find('int') > -1:
+            col_type = 'int'
+            units = self.opts.units or 1
+            self.curs.execute(def_ints_sql % (units, self.args[1], units, units, self.args[1], units, self.args[0]))
         
-        self.opts.create = False
-        if self.opts.units or self.opts.count > 1 or self.opts.start_ts or self.opts.end_ts:
-            self.opts.create = True
-        
-        units = self.opts.units if self.opts.units else 'month'
-        self.curs.execute(def_dates_sql % (units, self.args[1], units, self.args[1], self.args[0]))
         res = self.curs.fetchone()
-        if not self.opts.start_ts:
+        if not self.opts.start:
             if not res[0]:
                 self.parser.error("No data in table to use for default dates, you'll need to specify explicit dates if you want to partition this table.")
-            self.opts.start_ts = res[0]
+            self.opts.start = res[0]
         
-        self.opts.start_ts = normalize_date(self.curs, self.opts.start_ts, 'YYYYMMDD')
-
-        if self.opts.units:
-             self.opts.units = str(self.opts.count) + ' ' + self.opts.units
-    
-        if not self.opts.end_ts:
-            self.opts.end_ts = res[1]
-                    
+        if col_type == 'ts':
+            self.opts.start = normalize_date(self.curs, self.opts.start, 'YYYYMMDD')
+            self.opts.units = str(self.opts.scale) + ' ' + units
+        elif col_type == 'int':
+            self.opts.units = str(self.opts.scale * units)
+        
+        self.opts.end = self.opts.end or res[1]
+        
     def nextInterval(self, interval, *args):
         fmt = "to_char('%s'::timestamp + '%s', 'YYYYMMDD')"
         sql = 'SELECT '+','.join([fmt % (arg, interval) for arg in args])
@@ -139,9 +155,9 @@ class DatePartitioner(DBScript):
             idx_count += 1
             idxs_sql += idx.replace(self.table_name, self.table_name+'_%s_%s')+'; '
         
-        dates = (self.opts.start_ts, self.nextInterval(self.opts.units, self.opts.start_ts)[0])
+        dates = (self.opts.start, self.nextInterval(self.opts.units, self.opts.start)[0])
         while True:
-            if dates[0] > self.opts.end_ts:
+            if dates[0] > self.opts.end:
                 break
             try:
                 if self.opts.ignore_errors:
@@ -228,16 +244,13 @@ class DatePartitioner(DBScript):
     def work(self):
         super(DatePartitioner, self).work()
         try:
+            self.opts.create = True
             if self.opts.create:
                 self.set_trigger_func()
                 # build the dates ranges lists
-                args = [self.curs, self.opts.start_ts, self.opts.end_ts]
-                if self.opts.units:
-                    args.append(self.opts.units)
-                    dates = list(get_dates_by_unit(*args))
-                else:
-                    args.append(self.opts.count)
-                    dates = list(get_dates_by_count(*args))
+                args = [self.curs, self.opts.start, self.opts.end]
+                args.append(self.opts.units)
+                dates = list(get_dates_by_unit(*args))
         
                 # build the partitions
                 self.create_partitions(dates)

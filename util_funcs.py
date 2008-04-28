@@ -13,21 +13,18 @@ def table_exists(curs, table_name, schema_name='public'):
     curs.execute(check_sql, (table_name, schema_name))
     return curs.fetchone()
 
-def table_has_column(curs, table_name, column_name, schema_name='public'):
+def get_column_type(curs, table_name, column_name):
     '''
     Returns a result if the given table has the given column.
     '''
     check_sql = \
     '''
-    SELECT 1
-    FROM pg_class c, pg_attribute a, pg_type t, pg_namespace n
-    WHERE c.oid=a.attrelid
-        AND c.relname=%s AND a.attname=%s
-        AND c.relnamespace=n.oid AND n.nspname=%s
-        AND a.atttypid=t.oid AND t.typname ~ 'timestamp';
+    SELECT pg_catalog.format_type(a.atttypid, a.atttypmod)
+    FROM pg_attribute a
+    WHERE a.attrelid = %s::regclass AND a.attname=%s
     '''
-    curs.execute(check_sql, (table_name, column_name, schema_name))
-    return curs.fetchone()
+    curs.execute(check_sql, (table_name, column_name))
+    return curs.fetchone()[0]
     
 def get_constraint_defs(curs, table_name, schema_name='public'):
     '''
