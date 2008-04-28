@@ -21,7 +21,9 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         CREATE TABLE foo (
             id serial PRIMARY KEY,
             val integer,
-            val_ts timestamp without time zone NOT NULL
+            val_ts timestamp without time zone NOT NULL,
+            
+            CONSTRAINT film_id_fkey FOREIGN KEY (id) REFERENCES film (film_id)
         );
 
         CREATE INDEX foo_val_idx ON foo (val);
@@ -89,8 +91,20 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
     def testCreatesRangesWithSetStartTs(self):
         cmd = script+" -u month -s 20080101 foo val_ts"
         self.runTableValidations(cmd, '20080101', '20090101', '1 month')
+    
+    def testParentGetsInsertTrigger(self):
+        cmd = script+" -u month foo val_ts"
+        self.callproc(cmd)
         
-    def testParitionSchemaMatchesParent(self):
+        self.assertTableHasTrigger('foo', 'foo_partition_trigger', before=True, 
+                                        events='insert', row=True)
+        self.assertFunctionExists('foo_ins_trig', rettype='"trigger"')
+    
+    def testParentInserFuncCreated(self):
+        cmd = script+" -u month foo val_ts"
+        self.callproc(cmd)
+        
+    def testParitionSchemaMatchesParentNoFKeys(self):
         cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
         self.runTableValidations(cmd, '20080101', '20080201', '1 month')
         
@@ -103,6 +117,21 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
             self.assertTableHasIndex(tbl, tbl+'_val_idx', columns='val')
             self.assertTableHasIndex(tbl, tbl+'_val_ts_idx', columns='val_ts')
             self.assertTableHasPrimaryKey(tbl, 'id')
+    
+    def testPartitionSchemaMatchesParentWithFkeys(self):
+        cmd = script+" -u month -s 20080101 -e 20080201 -f foo val_ts"
+        self.runTableValidations(cmd, '20080101', '20080201', '1 month')
+        
+        for tbl in ['foo_20080101_20080201', 'foo_20080201_20080301']:
+            self.assertTableExists(tbl)
+            self.assertTableHasColumn(tbl, 'id', 'integer')
+            self.assertTableHasColumn(tbl, 'val_ts', 'timestamp without time zone')
+            self.assertTableHasColumn(tbl, 'val', 'integer')
+            self.assertTableHasCheckConstraint(tbl, tbl+'_val_ts_check')
+            self.assertTableHasIndex(tbl, tbl+'_val_idx', columns='val')
+            self.assertTableHasIndex(tbl, tbl+'_val_ts_idx', columns='val_ts')
+            self.assertTableHasPrimaryKey(tbl, 'id')
+            self.assertTableHasFKey(tbl, 'film', tbl+'_id_fkey', 'id')
     
     def testFullRangeMigratesAllData(self):
         cmd = script+" -u month -m foo val_ts"
@@ -135,7 +164,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.assertNotEqual(output.find('Moved 4 rows into partitions.'), -1)
         self.assertNotEqual(output.find('Kept 3 rows in the parent table.'), -1)
     
-    def testIgnoreExistingTableCreationFlag(self):
+    def testExistingTableCreatePassesWithIgnoreFlag(self):
         cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
         self.callproc(cmd)
         

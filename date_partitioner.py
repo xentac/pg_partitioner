@@ -78,6 +78,8 @@ class DatePartitioner(DBScript):
                      help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
         g.add_option('-m', '--migrate', action="store_true", default=False,
                      help="Migrate any data in the parent table in to available partitions. Default: False.")
+        g.add_option('-f', '--fkeys', action="store_true", default=False,
+                    help="Include building any fkeys present on the parent on the partitions.")
                      
         parser.add_option_group(g)
         
@@ -127,11 +129,15 @@ class DatePartitioner(DBScript):
         constraints = get_constraint_defs(self.curs, self.table_name)
         constraints = '' if not constraints else ','.join(constraints)+','
         
+        if self.opts.fkeys:
+            fkeys = get_fkey_defs(self.curs, self.table_name)
+            constraints = constraints + ('' if not fkeys else ','.join(fkeys)+',')
+        
         idxs_sql = ''
         idx_count = 0
-        for idx_tup in get_index_defs(self.curs, self.table_name):
+        for idx in get_index_defs(self.curs, self.table_name):
             idx_count += 1
-            idxs_sql += idx_tup[0].replace(self.table_name, self.table_name+'_%s_%s')+'; '
+            idxs_sql += idx.replace(self.table_name, self.table_name+'_%s_%s')+'; '
         
         dates = (self.opts.start_ts, self.nextInterval(self.opts.units, self.opts.start_ts)[0])
         while True:

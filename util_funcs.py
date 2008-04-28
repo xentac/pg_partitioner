@@ -33,21 +33,34 @@ def get_constraint_defs(curs, table_name, schema_name='public'):
     '''
     Returns a list of constraint definition fragments suitable for use 
     in SQL create table or alter table statements.  This will include
-    primary keys and unique indexes.
+    primary keys and unique indexes but not fkeys.
     '''
     constraints_sql = \
     '''
     SELECT pg_get_constraintdef(c.oid)
     FROM pg_class t, pg_constraint c, pg_namespace n
     WHERE t.relname=%s and n.nspname=%s
-        AND t.oid=c.conrelid AND t.relnamespace=n.oid;
+        AND t.oid=c.conrelid AND t.relnamespace=n.oid
+        AND c.contype!='f';
     '''
     curs.execute(constraints_sql, (table_name, schema_name))
-    constraints = []
-    for res in curs.fetchall():
-        constraints.append(res[0])
+    return [res[0] for res in curs.fetchall()]
     
-    return constraints
+def get_fkey_defs(curs, table_name, schema_name='public'):
+    '''
+    Returns a list of fkey definition fragments suitable for use in
+    SQL create table or alter table statements.
+    '''
+    fkeys_sql = \
+    '''
+    SELECT pg_get_constraintdef(c.oid)
+    FROM pg_class t, pg_constraint c, pg_namespace n
+    WHERE t.relname=%s AND n.nspname=%s
+        AND t.oid=c.conrelid AND t.relnamespace=n.oid
+        AND c.contype='f';
+    '''
+    curs.execute(fkeys_sql, (table_name, schema_name))
+    return [res[0] for res in curs.fetchall()]
 
 def get_index_defs(curs, table_name, schema_name='public'):
     '''
@@ -57,15 +70,14 @@ def get_index_defs(curs, table_name, schema_name='public'):
     '''
     indexes_sql = \
     '''
-    SELECT pg_get_indexdef(i.indexrelid) as def, ti.relname as name
-    FROM pg_class t, pg_class ti, pg_index i, pg_namespace n
+    SELECT pg_get_indexdef(i.indexrelid) as def
+    FROM pg_class t, pg_index i, pg_namespace n
     WHERE t.relname=%s AND n.nspname=%s
         AND t.relnamespace=n.oid AND t.oid=i.indrelid
-        AND i.indexrelid=ti.oid
         AND i.indisprimary IS NOT TRUE AND i.indisunique IS NOT TRUE;
     '''
     curs.execute(indexes_sql, (table_name, schema_name))
-    return curs.fetchall()
+    return [res[0] for res in curs.fetchall()]
 
 def table_attributes(curs, table_name, schema_name='public'):
     '''
@@ -80,10 +92,8 @@ def table_attributes(curs, table_name, schema_name='public'):
         AND a.attnum > 0 AND NOT a.attisdropped
     ORDER BY a.attnum;
     '''
-    atts = ()
     curs.execute(att_sql, (table_name, schema_name))
-    for res in curs.fetchall():
-        atts += (res[0],)
+    atts = tuple([res[0] for res in curs.fetchall()])
     return atts
 
 def normalize_date(curs, date_str, fmt, diff='0 months'):
