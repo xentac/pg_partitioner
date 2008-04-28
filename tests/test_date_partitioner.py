@@ -61,7 +61,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         while dates[0] <= end_date:
             part = self.part_fmt % dates
             self.assertTableExists(part)
-            self.assertNotEqual(output.find('Creating '+part), 1)
+            self.assertNotEqual(output.find('Creating '+part), -1)
             dates = dates[1], self.nextInterval(date_units, dates[1])
         
         part = self.part_fmt % (self.nextInterval('-'+date_units, start_date), start_date)
@@ -185,4 +185,18 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         output = p.stdout.read()
         self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
         self.failUnlessRaises(self.failureException, self.runTableValidations, cmd, '20080101', '20080501', '1 month')
+    
+    def testRunWithTestFlagDoesntCommit(self):
+        cmd = script+" -u month -t foo val_ts"
+        sts, p = self.callproc(cmd)
         
+        output = p.stdout.read()
+        dates = '20070701', self.nextInterval('1 month', '20070701')
+        while dates[0] <= '20090101':
+            part = self.part_fmt % dates
+            self.assertTableNotExists(part)
+            self.assertNotEqual(output.find('Creating '+part), -1) # still prints creation notices
+            dates = dates[1], self.nextInterval('1 month', dates[1])
+        
+        self.assertNotEqual(output.find('Test Run:'), -1)
+        self.assertNotEqual(output.find('Rolling back test run.'), -1)
