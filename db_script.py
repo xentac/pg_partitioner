@@ -49,7 +49,10 @@ class DBScript(object):
         pass
     
     def find_db_pass(self, conn_params):
-        password = ''
+        password = os.environ.get('PGPASSWORD', '')
+        if password:
+            return password
+            
         passfile = os.environ.get('PGPASS', os.environ['HOME']+'/.pgpass')
         pgpass = ':'.join([conn_params['host'], str(conn_params['port']), conn_params['dbname'], conn_params['user']])
         if os.path.isfile(passfile):

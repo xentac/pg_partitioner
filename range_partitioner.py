@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
-import sys, os
+import sys, os, re
 import psycopg2
-from psycopg2.extras import DictConnection
 from optparse import OptionGroup
 from db_script import DBScript
 from util_funcs import *
@@ -46,7 +45,15 @@ move_down_sql = \
 '''
 SELECT %(table_name)s_ins_func(t.*)
 FROM (SELECT *
-      FROM ONLY %(table_name)s ORDER BY %(ts_column)s OFFSET %(offset)s LIMIT 100) AS t;
+      FROM ONLY %(table_name)s ORDER BY %(ts_column)s OFFSET %(offset)s LIMIT %(limit)s) AS t;
+'''
+
+def_table_schema = \
+'''
+SELECT n.nspname
+FROM pg_namespace n, pg_class t
+WHERE t.relnamespace=n.oid
+    AND t.relname=%s AND pg_table_is_visible(t.oid)
 '''
 
 class DatePartitioner(DBScript):
@@ -54,12 +61,12 @@ class DatePartitioner(DBScript):
         super(DatePartitioner, self).__init__('DatePartitioner', args)
         
         if self.args[0].find('.') > -1:
+            self.qualified_table_name = self.args[0]
+            self.table_name = self.args[0].split('.')[1]
+        else:
+            self.curs.execute(def_table_schema, (self.args[0],))
+            self.qualified_table_name = self.curs.fetchone()[0]+'.'+self.args[0]
             self.table_name = self.args[0]
-            self.base_table_name = self.args[0].split('.')[1]
-        else:            
-            self.curs.execute('SELECT current_schema()')
-            self.table_name = self.curs.fetchone()[0]+'.'+self.args[0]
-            self.base_table_name = self.args[0]
         self.ts_column = self.args[1]
     
     def init_optparse(self):
@@ -79,14 +86,25 @@ class DatePartitioner(DBScript):
                      help="A valid date string for the end date of the partitions.Using --unit will force this be rounded to the nearest --unit value based from --start after --end. Defaults to the current date.")
         g.add_option('-i', '--ignore_errors', action="store_true", default=False,
                      help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
-        g.add_option('-m', '--migrate', action="store_true", default=False,
-                     help="Migrate any data in the parent table in to available partitions. Default: False.")
+        g.add_option('-m', '--migrate', action="callback", default=0, callback=self.migrate_opt_callback, dest="migrate",
+                     help="Migrate any data in the parent table in to available partitions. This is done by repeatedly moving X rows from the parent down until all rows have been processed where X is an optional argment to this option that defaults to 100.  Any rows for which no valid child table exists are left in the parent.")
         g.add_option('-f', '--fkeys', action="store_true", default=False,
                     help="Include building any fkeys present on the parent on the partitions.")
                      
         parser.add_option_group(g)
         
         return parser
+    
+    def migrate_opt_callback(self, option, opt_str, value, parser):
+        assert value is None
+        try:
+            value = int(parser.rargs[0])
+            del parser.rargs[0]
+        except ValueError:
+            value = 100
+            
+        setattr(parser.values, option.dest, value)
+        
     
     def validate_opts(self):
         if len(self.args) < 2:
@@ -99,24 +117,25 @@ class DatePartitioner(DBScript):
         if not self.col_type:
             self.parser.error("%s does not exist on %s." % (self.args[1], self.args[0]))
         self.set_range_vars()
-        # self.opts.create = False
-        # if self.opts.units or self.opts.count > 1 or self.opts.start or self.opts.end:
-        #     self.opts.create = True
     
     def set_range_vars(self):
-        if self.col_type == 'date' or self.col_type.find('time') > -1:
+        if self.col_type == 'date' or re.search('time[^\]]*$', self.col_type):
             self.short_type = 'ts'
             units = self.opts.units or 'month'
             self.curs.execute(def_dates_sql % (units, self.args[1], units, self.args[1], self.args[0]))
-        elif self.col_type.find('int') > -1:
+        elif re.search('int[^\]]*$', self.col_type):
             self.short_type = 'int'
-            units = self.opts.units or 1
+            units = int(self.opts.units) or 1
             self.curs.execute(def_ints_sql % (units, self.args[1], units, units, self.args[1], units, self.args[0]))
+        else:
+            raise RuntimeError("The type of %s (%s) is not valid for partitioning on (at this time)." 
+                                % (self.args[1], self.col_type))
         
         res = self.curs.fetchone()
         if not self.opts.start:
-            if not res[0]:
-                self.parser.error("No data in table to use for default dates, you'll need to specify explicit dates if you want to partition this table.")
+            # print self.curs.query
+            if res[0] is None:
+                self.parser.error("No data in table to use for default values, you'll need to specify explicit dates if you want to partition this table.")
             self.opts.start = res[0]
         
         if self.short_type == 'ts':
@@ -127,6 +146,7 @@ class DatePartitioner(DBScript):
             self.opts.units = str(self.opts.scale * units)
         
         self.opts.end = self.opts.end or res[1]
+        # print self.opts
         
     def nextInterval(self, val):
         if self.short_type == 'ts':
@@ -135,24 +155,38 @@ class DatePartitioner(DBScript):
             return self.curs.fetchone()[0]
         elif self.short_type == 'int':
             return str(int(val) + int(self.opts.units))
+    
+    def get_constraintdefs_str(self):
+        constraints = get_constraint_defs(self.curs, self.qualified_table_name)
+        constraints = '' if not constraints else ','.join(constraints)+','
+        
+        if self.opts.fkeys:
+            fkeys = get_fkey_defs(self.curs, self.qualified_table_name)
+            constraints = constraints + ('' if not fkeys else ','.join(fkeys)+',')
+        return constraints
+    
+    def get_indexdefs_str(self):
+        idxs_sql = ''
+        idx_count = 0
+        for idx in get_index_defs(self.curs, self.qualified_table_name):
+            idx_count += 1
+            idxs_sql += idx.replace(self.table_name, self.table_name+'_%s_%s')+'; '
+        return idxs_sql, idx_count
+    
+    def get_fkeydefs_str(self):
+        fkeys = get_fkey_defs(self.curs, self.qualified_table_name)
+        return '' if not fkeys else ','.join(fkeys)+','
         
     def create_partitions(self):
         '''
         Create the child partitions, bails out if it encounters a partition
         that already exists
         '''
-        constraints = get_constraint_defs(self.curs, self.table_name)
-        constraints = '' if not constraints else ','.join(constraints)+','
+        constraints_str = self.get_constraintdefs_str()
+        idxs_str, idx_count = self.get_indexdefs_str()
         
         if self.opts.fkeys:
-            fkeys = get_fkey_defs(self.curs, self.table_name)
-            constraints = constraints + ('' if not fkeys else ','.join(fkeys)+',')
-        
-        idxs_sql = ''
-        idx_count = 0
-        for idx in get_index_defs(self.curs, self.table_name):
-            idx_count += 1
-            idxs_sql += idx.replace(self.base_table_name, self.base_table_name+'_%s_%s')+'; '
+            constraints_str = constraints_str + self.get_fkeydefs_str()
         
         end_points = (self.opts.start, self.nextInterval(self.opts.start))
         while True:
@@ -162,13 +196,14 @@ class DatePartitioner(DBScript):
                 if self.opts.ignore_errors:
                     self.curs.execute('SAVEPOINT save;')
                     
-                part_table = '%s_%s_%s' % (self.table_name, end_points[0], end_points[1])
+                part_table = '%s_%s_%s' % (self.qualified_table_name, end_points[0], end_points[1])
                 print 'Creating ' + part_table
                 self.curs.execute(create_part_sql % 
-                        (part_table, constraints, self.ts_column, 
-                         end_points[0], self.ts_column, end_points[1], self.table_name))
+                        (part_table, constraints_str, self.ts_column, 
+                         end_points[0], self.ts_column, end_points[1], self.qualified_table_name))
                 
-                self.curs.execute(idxs_sql % ((end_points[0], end_points[1])*idx_count*2))
+                if idxs_str:
+                    self.curs.execute(idxs_str % ((end_points[0], end_points[1])*idx_count*2))
             except psycopg2.ProgrammingError, e:
                 print e,
                 if not self.opts.ignore_errors:
@@ -187,9 +222,9 @@ class DatePartitioner(DBScript):
 
         tpl_path = os.path.dirname(os.path.realpath(__file__))
         funcs_sql = open(tpl_path+'/range_part_trig.tpl.sql').read()
-        table_atts = table_attributes(self.curs, self.table_name)
-        d = {'table_name': self.table_name,
-             'base_table_name': self.base_table_name,
+        table_atts = table_attributes(self.curs, self.qualified_table_name)
+        d = {'table_name': self.qualified_table_name,
+             'base_table_name': self.table_name,
              'ts_column': self.ts_column,
              'table_atts': ','.join(table_atts),
              'atts_vals': " || ',' || ".join(["quote_nullable(rec.%s)" % att for att in table_atts]),
@@ -203,18 +238,19 @@ class DatePartitioner(DBScript):
     
     def move_data_down(self):
         '''
-        In the looop SELECT %s_ins_func(); will push any data down it can and return anything it can't.
+        In the loop SELECT %s_ins_func(); will push any data down it can and return anything it can't.
         We then DELETE everything touched and, after the loop, re-insert data that couldn't be moved.
         '''
-        d = {'table_name': self.table_name,
-             'base_table_name': self.base_table_name,
+        d = {'table_name': self.qualified_table_name,
+             'base_table_name': self.table_name,
              'ts_column': self.ts_column,
-             'offset': 0
+             'offset': 0,
+             'limit': self.opts.migrate
             }
         
         self.curs.execute(trig_check_sql % d)
         if not self.curs.fetchone():
-            print '%s is not partitioned.' % self.table_name
+            print '%s is not partitioned.' % self.qualified_table_name
             sys.exit(1)
             
         keep = []
@@ -235,11 +271,11 @@ class DatePartitioner(DBScript):
         all_moved = '' if keep else '(all) '
         print 'Moved %d %srows into partitions.' % (moved, all_moved)
         
-        self.curs.execute('TRUNCATE %s;' % self.table_name)
+        self.curs.execute('TRUNCATE %s;' % self.qualified_table_name)
         
         if keep:
             keep = (','.join([','.join(res) for res in keep])).replace('"', "'")
-            self.curs.execute('INSERT INTO %s VALUES %s;' % (self.table_name, keep))
+            self.curs.execute('INSERT INTO %s VALUES %s;' % (self.qualified_table_name, keep))
             print 'Kept %d rows in the parent table.' % kept
         
     def work(self):
@@ -265,7 +301,11 @@ def main(args=None):
     if not args:
         args = sys.argv[1:]
     
-    dp = DatePartitioner(args)
+    try:
+        dp = DatePartitioner(args)
+    except RuntimeError, e:
+        print e
+        sys.exit(1)
     dp.work()
 
 if __name__ == '__main__':

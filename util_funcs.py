@@ -1,15 +1,21 @@
 
-def table_exists(curs, table_name):
+def table_exists(curs, table_name=''):
     '''
     Fetches a row if the given table exists.
     '''
     check_sql = \
     '''
     SELECT 1
-    FROM pg_class t
-    WHERE t.oid=%s::regclass AND t.relkind='r'
+    FROM pg_class t, pg_namespace n
+    WHERE t.relname=%s AND t.relkind='r'
+        AND t.relnamespace=n.oid
     '''
-    curs.execute(check_sql, (table_name,))
+    if table_name.find('.') > -1:
+        schema_name, table_name = table_name.split('.')
+        check_sql += " AND n.nspname='%s'" % schema_name
+    else:
+        check_sql += " AND pg_table_is_visible(t.oid)"
+    curs.execute(check_sql, (table_name, ))
     return curs.fetchone()
 
 def get_column_type(curs, table_name, column_name):
