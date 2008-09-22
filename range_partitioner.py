@@ -76,18 +76,18 @@ class DatePartitioner(DBScript):
         g = OptionGroup(parser, "Partitioning options", 
                         "Ways to customize the number of partitions and/or the range of each.  Nothing is created if none of these is used.  This is useful for making table paritioning a two step process: 1. Create the partitions using the below options.  2. Migrate the data from the parent table into the new partitions using the above -m option.")
         g.add_option('-u', '--units', dest="units", metavar='UNIT',
-                     help="A valid PG unit for the column partitioned on. Defaults to month for timestamp/date columns and 1 for integer column types")
+                     help="A valid PG unit for the column partitioned on.  Defaults to month for timestamp/date columns and 1 for integer column types")
         g.add_option('--scale', type='int', metavar='COUNT',
                      default=1,
                      help="A 'scale factor' for the units.  The resulting range of values per partition created is scale * units.  The default is 1.")
         g.add_option('-s', '--start', 
-                     help="A valid date string for the start date for the partitions. If used with --units this will default to the oldest DATE_FIELD value in the table truncated to --units, else will truncate to day.")
+                     help="A valid date string for the start date for the partitions.  If used with --units this will default to the oldest DATE_FIELD value in the table truncated to --units, else will truncate to day.")
         g.add_option('-e', '--end', 
-                     help="A valid date string for the end date of the partitions.Using --unit will force this be rounded to the nearest --unit value based from --start after --end. Defaults to the current date.")
+                     help="A valid date string for the end date of the partitions.  Using --unit will force this be rounded to the nearest --unit value based from --start after --end. Defaults to the current date.")
         g.add_option('-i', '--ignore_errors', action="store_true", default=False,
                      help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
         g.add_option('-m', '--migrate', action="callback", default=0, callback=self.migrate_opt_callback, dest="migrate",
-                     help="Migrate any data in the parent table in to available partitions. This is done by repeatedly moving X rows from the parent down until all rows have been processed where X is an optional argment to this option that defaults to 100.  Any rows for which no valid child table exists are left in the parent.")
+                     help="Migrate any data in the parent table in to available partitions.  This is done by repeatedly moving X rows from the parent down until all rows have been processed where X is an optional argment to this option that defaults to 100.  Any rows for which no valid child table exists are left in the parent.")
         g.add_option('-f', '--fkeys', action="store_true", default=False,
                     help="Include building any fkeys present on the parent on the partitions.")
                      
@@ -170,7 +170,12 @@ class DatePartitioner(DBScript):
         idx_count = 0
         for idx in get_index_defs(self.curs, self.qualified_table_name):
             idx_count += 1
-            idxs_sql += idx.replace(self.table_name, self.table_name+'_%s_%s')+'; '
+            i = idx.find(self.table_name) + len(self.table_name)
+            idx = idx[:i]+'_%s_%s'+idx[i:]
+            i = idx.rfind(self.table_name) + len(self.table_name)
+            idx = idx[:i]+'_%s_%s'+idx[i:]
+            idxs_sql += idx+';'
+        print idxs_sql
         return idxs_sql, idx_count
     
     def get_fkeydefs_str(self):

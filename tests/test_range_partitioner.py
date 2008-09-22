@@ -1,5 +1,5 @@
 
-import dbtestcase
+from pydbtest import dbtestcase
 import sys, os, subprocess
 from copy import copy
 
@@ -29,15 +29,22 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         CREATE INDEX foo_val_idx ON foo (val);
         CREATE INDEX foo_val_ts_idx ON foo (val_ts);
 
-        INSERT INTO foo (val, val_ts) VALUES (3, '20070703'::timestamp), (5, '20080101'), (6, '2007-11-15'), (10, now()), (15, '20080504'), (5, '2008-02-02'), (23, '20090101');
+        INSERT INTO foo (val, val_ts) VALUES (3, '20070703'), (5, '20080101'), (6, '20071115'), (10, '20080401'), (15, '20080504'), (5, '2008-02-02'), (23, '20090101');
         '''
         default_schema_sql = 'SELECT current_schema();'
+        pg_version_sql = 'SELECT version();'
+        
         self.part_fmt = 'foo_%s_%s'
         self.transactional = False
+        
         self.connect('dbname=dateparttest')
         self.exec_query(parent_sql)
+        
         self.exec_query(default_schema_sql)
         self.default_schema = self.cursor().fetchone()[0]
+        
+        self.exec_query(pg_version_sql)
+        self.pg_version =  self.cursor().fetchone()[0].split()[1]
         self._commit()
     
     def tearDown(self):
@@ -101,11 +108,12 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         
         self.assertTableHasTrigger('foo', 'foo_partition_trigger', before=True, 
                                         events='insert', row=True)
-        self.assertFunctionExists('foo_ins_trig', rettype='"trigger"')
     
-    def testParentInserFuncCreated(self):
+    def testParentInsertFuncCreated(self):
         cmd = script+" -u month foo val_ts"
         self.callproc(cmd)
+        typname = 'trigger' if self.pg_version.startswith('8.3') else '"trigger"'
+        self.assertFunctionExists('foo_ins_trig', rettype=typname)
         
     def testParitionSchemaMatchesParentNoFKeys(self):
         cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
