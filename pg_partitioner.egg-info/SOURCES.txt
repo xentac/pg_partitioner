@@ -1,0 +1,16 @@
+setup.cfg
+setup.py
+pg_partitioner/__init__.py
+pg_partitioner/db_script.py
+pg_partitioner/pg_partitioner.py
+pg_partitioner/range_part_trig.tpl.sql
+pg_partitioner/util_funcs.py
+pg_partitioner.egg-info/PKG-INFO
+pg_partitioner.egg-info/SOURCES.txt
+pg_partitioner.egg-info/dependency_links.txt
+pg_partitioner.egg-info/entry_points.txt
+pg_partitioner.egg-info/not-zip-safe
+pg_partitioner.egg-info/top_level.txt
+pg_partitioner/tests/init_pagila.py
+pg_partitioner/tests/pagila-0.9.0.zip
+pg_partitioner/tests/test_pg_partitioner.py

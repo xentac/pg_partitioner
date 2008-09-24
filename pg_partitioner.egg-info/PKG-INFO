@@ -1,0 +1,11 @@
+Metadata-Version: 1.0
+Name: pg-partitioner
+Version: 0.0dev-r149
+Summary: Scripts for partioning PostgreSQL tables
+Home-page: UNKNOWN
+Author: Erik Jones
+Author-email: mage2k@gmail.com
+License: BSD
+Description: Handle automatic generation of range based partition tables including creation of identical indexes and constraints (fkeys are optional), insert triggers for the parent tables, and optionally moves data from parent table into child tables.
+Keywords: postgresql psycopg2 database partitioning
+Platform: UNKNOWN
