@@ -133,7 +133,6 @@ class DatePartitioner(DBScript):
         
         res = self.curs.fetchone()
         if not self.opts.start:
-            # print self.curs.query
             if res[0] is None:
                 self.parser.error("No data in table to use for default values, you'll need to specify explicit dates if you want to partition this table.")
             self.opts.start = res[0]
@@ -146,7 +145,6 @@ class DatePartitioner(DBScript):
             self.opts.units = str(self.opts.scale * units)
         
         self.opts.end = self.opts.end or res[1]
-        # print self.opts
         
     def nextInterval(self, val):
         if self.short_type == 'ts':
