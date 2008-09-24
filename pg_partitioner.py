@@ -168,14 +168,17 @@ class DatePartitioner(DBScript):
     def get_indexdefs_str(self):
         idxs_sql = ''
         idx_count = 0
+        idx_re = re.compile(r'(create (?:unique )?index )(.*)', re.I)
         for idx in get_index_defs(self.curs, self.qualified_table_name):
             idx_count += 1
-            i = idx.find(self.table_name) + len(self.table_name)
-            idx = idx[:i]+'_%s_%s'+idx[i:]
+            if idx.count(self.table_name) == 1: 
+                idx = re.sub(idx_re, r'\1%s_%%s_%%s_\2' % self.table_name, idx)
+            else:
+                i = idx.find(self.table_name) + len(self.table_name)
+                idx = idx[:i]+'_%s_%s'+idx[i:]
             i = idx.rfind(self.table_name) + len(self.table_name)
             idx = idx[:i]+'_%s_%s'+idx[i:]
             idxs_sql += idx+';'
-        print idxs_sql
         return idxs_sql, idx_count
     
     def get_fkeydefs_str(self):
