@@ -10,6 +10,8 @@ pg_partitioner.egg-info/SOURCES.txt
 pg_partitioner.egg-info/dependency_links.txt
 pg_partitioner.egg-info/entry_points.txt
 pg_partitioner.egg-info/not-zip-safe
+pg_partitioner.egg-info/paster_plugins.txt
+pg_partitioner.egg-info/requires.txt
 pg_partitioner.egg-info/top_level.txt
 pg_partitioner/tests/init_pagila.py
 pg_partitioner/tests/pagila-0.9.0.zip

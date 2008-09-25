@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 import sys, os
 
-version = '0.0'
+version = '0.1'
 
 setup(name='pg_partitioner',
       version=version,
@@ -18,9 +18,10 @@ Handle automatic generation of range based partition tables including creation o
       include_package_data=True,
       zip_safe=False,
       install_requires=[
-          # -*- Extra requirements: -*-
+          'psycopg2', 'pydbtest'
       ],
-      entry_points="""
-      # -*- Entry points: -*-
-      """,
+      entry_points={  
+          "console_scripts": [  
+              'pg_partitioner = pg_partitioner.pg_partitioner:main'  
+          ]},
       )

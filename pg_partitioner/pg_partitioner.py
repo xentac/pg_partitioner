@@ -100,7 +100,7 @@ class DatePartitioner(DBScript):
         try:
             value = int(parser.rargs[0])
             del parser.rargs[0]
-        except ValueError:
+        except (ValueError, IndexError):
             value = 100
             
         setattr(parser.values, option.dest, value)
