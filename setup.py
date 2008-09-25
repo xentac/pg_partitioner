@@ -18,7 +18,7 @@ Handle automatic generation of range based partition tables including creation o
       include_package_data=True,
       zip_safe=False,
       install_requires=[
-          'psycopg2', 'pydbtest'
+          'psycopg2'
       ],
       entry_points={  
           "console_scripts": [  
