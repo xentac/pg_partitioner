@@ -1,6 +1,6 @@
 Metadata-Version: 1.0
 Name: pg-partitioner
-Version: 0.1
+Version: 0.1dev
 Summary: Scripts for partioning PostgreSQL tables
 Home-page: UNKNOWN
 Author: Erik Jones
