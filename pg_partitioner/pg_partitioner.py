@@ -270,9 +270,9 @@ class DatePartitioner(DBScript):
                 else:
                     moved += 1
                     
-            if self.curs.rowcount < 100:
+            if self.curs.rowcount < self.opts.migrate:
                 break
-            d['offset'] += 100;
+            d['offset'] += self.opts.migrate;
         
         all_moved = '' if keep else '(all) '
         print 'Moved %d %srows into partitions.' % (moved, all_moved)

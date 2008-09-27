@@ -5,6 +5,7 @@
 # the defaults coming from the environment as with psql
 
 import sys, os
+import getpass
 import psycopg2
 from psycopg2.extras import DictConnection
 from optparse import OptionParser
@@ -19,7 +20,7 @@ def default_db_port():
     return int(os.environ.get('PGPORT', 5432))
 
 def default_db_host():
-    return os.environ.get('PGHOSTADDR', os.environ.get('PGHOST', 'localhost'))
+    return os.environ.get('PGHOSTADDR', os.environ.get('PGHOST', ''))
 
 def default_db_str():
     return "dbname=%s user=%s host=%s port=%s" % (default_db_dbname(), default_db_user(), 
@@ -38,8 +39,21 @@ class DBScript(object):
         parser = OptionParser(usage=usage)
 
         default_conn_str = default_db_str()
-        parser.add_option('--db', default=default_conn_str, metavar='DB_CONN_STRING',
-                          help="A valid psycopg2 db conneciton string.  Any options not supplied will come from: '%s'.  You *can* supply a password here, but it is recommended that you don't for security reasons (you'll be prompted instead).  You can also set the standard libpq environment variables or use a .pgpass file to obviate the need for this option entirely." % default_conn_str)
+        h = parser.get_option('-h')
+        parser.remove_option('-h')
+        h._short_opts = []
+        # h.short_opts = None
+        parser.add_option(h)
+        parser.add_option('-d', '--database', default=default_db_dbname(), metavar='DBNAME',
+                          help='specify database name to connect to (default: "%s")' % default_db_dbname())
+        parser.add_option('-h', '--host', default=default_db_host(), metavar='HOSTNAME',
+                          help='database server host or socket directory (default: "local socket")')
+        parser.add_option('-p', '--port', default=default_db_port(), metavar='PORT',
+                          help='database server port (default: "%s")' % default_db_port())
+        parser.add_option('-U', '--user', default=default_db_user(), metavar='NAME',
+                          help='database user name (default: "%s")' % default_db_user())
+        # parser.add_option('--db', default=default_conn_str, metavar='DB_CONN_STRING',
+                          # help="A valid psycopg2 db conneciton string.  Any options not supplied will come from: '%s'.  You *can* supply a password here, but it is recommended that you don't for security reasons (you'll be prompted instead).  You can also set the standard libpq environment variables or use a .pgpass file to obviate the need for this option entirely." % default_conn_str)
         parser.add_option('-t', '--test', action='store_true', default=False,
                           help="Test run, nothing gets commited.  Useful to check output to see if everything looks sane. Default: False")
         
@@ -63,23 +77,26 @@ class DBScript(object):
         return password
 
     def get_connection(self):
-        self.conn_params = dict([v.split('=') for v in self.opts.db.split()])
-        for k in ['dbname', 'host', 'user', 'port']:
-            if k not in self.conn_params:
-                self.conn_params[k] = globals()['default_db_%s'%k]()
+        conn_str = "dbname=%(dbname)s user=%(user)s port=%(port)s"
+        conn_params = {'dbname' : self.opts.database,
+                       'host' : self.opts.host,
+                       'port' : self.opts.port,
+                       'user' : self.opts.user}
+        conn_params['password'] = self.find_db_pass(conn_params)
         
-        # do we have a password?
-        if 'password' not in self.conn_params:
-            self.conn_params['password'] = self.find_db_pass(self.conn_params)
-     
-        con_str = "dbname=%(dbname)s user=%(user)s host=%(host)s port=%(port)s password=%(password)s"
-
+        if conn_params['password']:
+            conn_str += ' password=%(password)s'
+        if conn_params['host']:
+            conn_str += ' host=%(host)s'
+            
         try:
-            return DictConnection(con_str % self.conn_params)
+            return DictConnection(conn_str % conn_params)
         except psycopg2.OperationalError, e:
             if str(e).strip().endswith('no password supplied'):
-                self.conn_params['password'] = getpass.getpass('password: ')
-                return DictConnection(con_str % (opts.database, opts.username, opts.host, opts.port, password))
+                conn_params['password'] = getpass.getpass('password: ')
+                conn_str += ' password=%(password)s'
+                print conn_str % conn_params
+                return DictConnection(conn_str % conn_params)
             raise e
         except psycopg2.Error, e:
             raise e
