@@ -10,7 +10,7 @@ def setUpModule():
 def tearDownModule():
     dbtestcase.tearDownSampleDB()
 
-script = "../pg_partitioner.py --db dbname=dateparttest"
+script = "../pg_partitioner.py -d dateparttest"
 
 class TestDatePartitioner(dbtestcase.DBTestCase):
     def setUp(self):

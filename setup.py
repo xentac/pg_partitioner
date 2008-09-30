@@ -24,4 +24,6 @@ Handle automatic generation of range based partition tables including creation o
           "console_scripts": [  
               'pg_partitioner = pg_partitioner.pg_partitioner:main'  
           ]},
+      test_suite='nose.collector',
+      test_requires=['Nose'],
       )
