@@ -43,9 +43,7 @@ CREATE TRIGGER %(base_table_name)s_partition_trigger BEFORE INSERT OR UPDATE
 
 move_down_sql = \
 '''
-SELECT %(table_name)s_ins_func(t.*)
-FROM (SELECT *
-      FROM ONLY %(table_name)s ORDER BY %(ts_column)s OFFSET %(offset)s LIMIT %(limit)s) AS t;
+SELECT move_partition_data('%(table_name)s', '%(ts_column)s', %(limit)s);
 '''
 
 def_table_schema = \
@@ -250,7 +248,6 @@ class DatePartitioner(DBScript):
         d = {'table_name': self.qualified_table_name,
              'base_table_name': self.table_name,
              'ts_column': self.ts_column,
-             'offset': 0,
              'limit': self.opts.migrate
             }
         
@@ -259,30 +256,11 @@ class DatePartitioner(DBScript):
             print '%s is not partitioned.' % self.qualified_table_name
             sys.exit(1)
             
-        keep = []
-        kept = moved = 0
-        while True:
-            self.curs.execute(move_down_sql % d)
-            for res in self.curs.fetchall():
-                if res[0] is not None:
-                    kept += 1
-                    keep.append(res)
-                else:
-                    moved += 1
-                    
-            if self.curs.rowcount < self.opts.migrate:
-                break
-            d['offset'] += self.opts.migrate;
+        self.curs.execute(move_down_sql % d)
+        moved = self.curs.fetchone()[0]
+        print 'Moved %d rows into partitions.' % moved
         
-        all_moved = '' if keep else '(all) '
-        print 'Moved %d %srows into partitions.' % (moved, all_moved)
-        
-        self.curs.execute('TRUNCATE %s;' % self.qualified_table_name)
-        
-        if keep:
-            keep = (','.join([','.join(res) for res in keep])).replace('"', "'")
-            self.curs.execute('INSERT INTO %s VALUES %s;' % (self.qualified_table_name, keep))
-            print 'Kept %d rows in the parent table.' % kept
+        # self.curs.execute('TRUNCATE %s;' % self.qualified_table_name)
         
     def work(self):
         super(DatePartitioner, self).work()

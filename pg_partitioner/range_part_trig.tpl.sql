@@ -4,6 +4,20 @@ CREATE OR REPLACE FUNCTION quote_nullable(val anyelement)
     SELECT COALESCE(quote_literal($1), 'NULL');
 $$ LANGUAGE sql;
 
+CREATE OR REPLACE FUNCTION quote_array_literals(arr anyarray)
+    RETURNS text[] AS $$
+DECLARE
+    i int;
+    ret text[];
+BEGIN
+    FOR i IN 1 .. array_upper(arr, 1)
+    LOOP
+        ret[i] := quote_literal(arr[i]);
+    END LOOP;
+    RETURN ret;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION get_table_partitions(text)
     RETURNS SETOF text AS $$
     SELECT n.nspname || '.' || t.relname::text
@@ -36,6 +50,7 @@ DECLARE
     moved integer;
     to_move integer DEFAULT count;
     total_moved integer DEFAULT 0;
+    offset integer;
 BEGIN
     SELECT * FROM get_table_pkey_fields(table_name) INTO pkey_fields;
     
@@ -49,10 +64,11 @@ BEGIN
     FOR partition IN
         SELECT * FROM get_table_partitions(table_name)
     LOOP
-        raise notice 'moving data for partition: %%', partition;
+        -- raise notice 'moving data for partition: %%', partition;
         SELECT array[substring(partition from '^'||table_name||'_([0-9]*)_[0-9]*$'),
                substring(partition from '^'||table_name||'_[0-9]*_([0-9]*)$')]
         INTO bounds;
+        offset := 0;
         <<partition_loop>>
         LOOP
             -- ensure we don't pass the max rows to be moved if it's set
@@ -64,27 +80,33 @@ BEGIN
             move_data_sql := 'INSERT INTO ' || partition || '
                               SELECT *
                               FROM ONLY ' || table_name || '
-                              WHERE ' || part_col || ' >= ' || quote_literal(bounds[1]) || ' AND ' || 
-                                part_col || ' < ' || quote_literal(bounds[2]) || '
-                              LIMIT ' || quote_literal(to_move) || '
-                              RETURNING ''(''||' || array_to_string(pkey_fields_conv, ',') || '||'')'';';
+                              WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' || 
+                                quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || '
+                              ORDER BY ' || quote_ident(part_col) || '
+                              LIMIT ' || quote_literal(to_move) || ' ';
             -- RAISE NOTICE 'move data sql: %%', move_data_sql;
-            FOR moved_data_pkey IN EXECUTE move_data_sql
-            LOOP
-                -- RAISE NOTICE 'move data pkey: %%', moved_data_pkey;
-                pkeys_str := pkeys_str || moved_data_pkey || ',';
-            END LOOP;
+            IF max != 'Infinity' THEN
+                move_data_sql := move_data_sql || ' RETURNING ''('' || array_to_string(quote_array_literals(array[' || array_to_string(pkey_fields_conv, ',') || ']), '','') || '')'';';
+                FOR moved_data_pkey IN EXECUTE move_data_sql
+                LOOP
+                    -- RAISE NOTICE 'move data pkey: %%', moved_data_pkey;
+                    pkeys_str := pkeys_str || moved_data_pkey || ',';
+                END LOOP;
             
-            EXIT WHEN NOT FOUND;
-            GET DIAGNOSTICS moved := ROW_COUNT;
-            -- raise notice 'inserted count: %%', moved;
-            -- raise notice 'pkeys: %%', pkeys_str;
+                EXIT WHEN NOT FOUND;
+                GET DIAGNOSTICS moved := ROW_COUNT;
+                -- raise notice 'inserted count: %%', moved;
                         
-            pkeys_str := substring(pkeys_str from 1 for char_length(pkeys_str)-1);
-            delete_sql := 'DELETE FROM ONLY ' || table_name || '
-                           WHERE (' || array_to_string(pkey_fields, ',') || ') = any(ARRAY[' || pkeys_str ||']);';
-            -- RAISE NOTICE 'delete data sql: %%', delete_sql;
-            EXECUTE delete_sql;
+                pkeys_str := substring(pkeys_str from 1 for char_length(pkeys_str)-1);
+                delete_sql := 'DELETE FROM ONLY ' || table_name || '
+                               WHERE (' || array_to_string(pkey_fields, ',') || ') IN (' || pkeys_str ||');';
+                -- RAISE NOTICE 'delete data sql: %%', delete_sql;
+                EXECUTE delete_sql;
+            ELSE
+                move_data_sql := move_data_sql || ' OFFSET ' || quote_literal(offset);
+                EXECUTE move_data_sql;
+                offset := offset + to_move;
+            END IF;
             
             GET DIAGNOSTICS moved := ROW_COUNT;
             -- raise notice 'deleted count: %%', moved;
@@ -93,6 +115,11 @@ BEGIN
             EXIT main_loop WHEN total_moved = max;
             EXIT partition_loop WHEN moved < count;
         END LOOP;
+        IF max = 'Infinity' THEN
+            EXECUTE 'DELETE FROM ONLY ' || table_name || '
+                     WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' ||
+                        quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || ';';
+        END IF;
     END LOOP;
     RETURN total_moved;
 END;
