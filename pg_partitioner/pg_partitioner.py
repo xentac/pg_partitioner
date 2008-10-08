@@ -6,44 +6,12 @@ from optparse import OptionGroup
 from db_script import DBScript
 from util_funcs import *
 
-create_part_sql = \
-'''
-CREATE TABLE %s (
-    %s
-    CHECK (%s >= '%s' AND %s < '%s')
-) INHERITS (%s);
-'''
-
-def_dates_sql = \
-'''
-SELECT to_char(date_trunc('%s', MIN(%s)), 'YYYYMMDD'), to_char(date_trunc('%s', MAX(%s)), 'YYYYMMDD')
-FROM %s;
-'''
-
-def_ints_sql = \
-'''
-SELECT %s * (MIN(%s)/%s), %s * (MAX(%s)/%s) 
-FROM %s;
-'''
-
 trig_check_sql = \
 '''
 SELECT 1
 FROM pg_trigger t
 WHERE t.tgrelid='%(table_name)s'::regclass
     AND t.tgname='%(base_table_name)s_partition_trigger';
-'''
-
-create_trig_sql = \
-'''
-CREATE TRIGGER %(base_table_name)s_partition_trigger BEFORE INSERT OR UPDATE
-    ON %(table_name)s FOR EACH ROW
-    EXECUTE PROCEDURE %(table_name)s_ins_trig();
-'''
-
-move_down_sql = \
-'''
-SELECT move_partition_data('%(table_name)s', '%(ts_column)s', %(limit)s);
 '''
 
 def_table_schema = \
@@ -117,6 +85,18 @@ class DatePartitioner(DBScript):
         self.set_range_vars()
     
     def set_range_vars(self):
+        def_dates_sql = \
+        '''
+        SELECT to_char(date_trunc('%s', MIN(%s)), 'YYYYMMDD'), to_char(date_trunc('%s', MAX(%s)), 'YYYYMMDD')
+        FROM %s;
+        '''
+
+        def_ints_sql = \
+        '''
+        SELECT %s * (MIN(%s)/%s), %s * (MAX(%s)/%s) 
+        FROM %s;
+        '''
+        
         if self.col_type == 'date' or re.search('time[^\]]*$', self.col_type):
             self.short_type = 'ts'
             units = self.opts.units or 'month'
@@ -186,6 +166,14 @@ class DatePartitioner(DBScript):
         Create the child partitions, bails out if it encounters a partition
         that already exists
         '''
+        create_part_sql = \
+        '''
+        CREATE TABLE %s (
+            %s
+            CHECK (%s >= '%s' AND %s < '%s')
+        ) INHERITS (%s);
+        '''
+        
         constraints_str = self.get_constraintdefs_str()
         
         if self.opts.fkeys:
@@ -234,6 +222,12 @@ class DatePartitioner(DBScript):
         Uses the template date_part_trig.tpl.sql to build out a trigger function
         for the parent table if it's not already there
         '''
+        create_trig_sql = \
+        '''
+        CREATE TRIGGER %(base_table_name)s_partition_trigger BEFORE INSERT OR UPDATE
+            ON %(table_name)s FOR EACH ROW
+            EXECUTE PROCEDURE %(table_name)s_ins_trig();
+        '''
 
         tpl_path = os.path.dirname(os.path.realpath(__file__))
         funcs_sql = open(tpl_path+'/range_part_trig.tpl.sql').read()
@@ -256,6 +250,11 @@ class DatePartitioner(DBScript):
         In the loop SELECT %s_ins_func(); will push any data down it can and return anything it can't.
         We then DELETE everything touched and, after the loop, re-insert data that couldn't be moved.
         '''
+        move_down_sql = \
+        '''
+        SELECT move_partition_data('%(table_name)s', '%(ts_column)s', %(limit)s);
+        '''
+        
         d = {'table_name': self.qualified_table_name,
              'base_table_name': self.table_name,
              'ts_column': self.ts_column,
@@ -272,10 +271,16 @@ class DatePartitioner(DBScript):
         print 'Moved %d rows into partitions.' % moved
         
         # self.curs.execute('TRUNCATE %s;' % self.qualified_table_name)
+    
+    def load_plpgsql_funcs(self):
+        tpl_path = os.path.dirname(os.path.realpath(__file__))
+        funcs_sql = open(tpl_path+'/pg_partitioner.sql').read()
+        self.curs.execute(funcs_sql)
         
     def work(self):
         super(DatePartitioner, self).work()
         try:
+            self.load_plpgsql_funcs()
             self.opts.create = True
             if self.opts.create:
                 self.set_trigger_func()
