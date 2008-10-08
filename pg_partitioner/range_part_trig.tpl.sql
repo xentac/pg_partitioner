@@ -22,19 +22,20 @@ CREATE OR REPLACE FUNCTION get_table_pkey_fields(table_name text)
                     AND c.contype='p' AND c.conrelid=$1::regclass)
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION move_partition_data(table_name text, part_col text, count integer)
-    RETURNS void AS $$
+CREATE OR REPLACE FUNCTION move_partition_data(table_name text, part_col text, count integer, max real)
+    RETURNS integer AS $$
 DECLARE
     bounds text[];
     partition text;
     pkey_fields text[];
     pkey_fields_conv text[];
-    pkey_vals text;
+    pkeys_str text;
     move_data_sql text;
     moved_data_pkey text;
     delete_sql text;
-    offset integer;
     moved integer;
+    to_move integer DEFAULT count;
+    total_moved integer DEFAULT 0;
 BEGIN
     SELECT * FROM get_table_pkey_fields(table_name) INTO pkey_fields;
     
@@ -44,6 +45,7 @@ BEGIN
         pkey_fields_conv[i] := pkey_fields[i] || '::text';
     END LOOP;
     
+    <<main_loop>>
     FOR partition IN
         SELECT * FROM get_table_partitions(table_name)
     LOOP
@@ -51,41 +53,55 @@ BEGIN
         SELECT array[substring(partition from '^'||table_name||'_([0-9]*)_[0-9]*$'),
                substring(partition from '^'||table_name||'_[0-9]*_([0-9]*)$')]
         INTO bounds;
-        offset := 0;
+        <<partition_loop>>
         LOOP
-            pkey_vals := '';
+            -- ensure we don't pass the max rows to be moved if it's set
+            IF total_moved + to_move > max THEN
+                to_move := max - total_moved;
+            END IF;
+            
+            pkeys_str := '';
             move_data_sql := 'INSERT INTO ' || partition || '
                               SELECT *
-                              FROM ' || table_name || '
+                              FROM ONLY ' || table_name || '
                               WHERE ' || part_col || ' >= ' || quote_literal(bounds[1]) || ' AND ' || 
                                 part_col || ' < ' || quote_literal(bounds[2]) || '
-                              OFFSET ' || offset::text || ' LIMIT ' || count::text || '
+                              LIMIT ' || quote_literal(to_move) || '
                               RETURNING ''(''||' || array_to_string(pkey_fields_conv, ',') || '||'')'';';
             -- RAISE NOTICE 'move data sql: %%', move_data_sql;
             FOR moved_data_pkey IN EXECUTE move_data_sql
             LOOP
                 -- RAISE NOTICE 'move data pkey: %%', moved_data_pkey;
-                pkey_vals := pkey_vals || moved_data_pkey || ',';
+                pkeys_str := pkeys_str || moved_data_pkey || ',';
             END LOOP;
             
             EXIT WHEN NOT FOUND;
-            -- GET DIAGNOSTICS moved := ROW_COUNT;
-            -- raise notice 'row count: %%, pkey_vals %%', moved, pkey_vals;
+            GET DIAGNOSTICS moved := ROW_COUNT;
+            -- raise notice 'inserted count: %%', moved;
+            -- raise notice 'pkeys: %%', pkeys_str;
                         
-            pkey_vals := substring(pkey_vals from 1 for char_length(pkey_vals)-1);
+            pkeys_str := substring(pkeys_str from 1 for char_length(pkeys_str)-1);
             delete_sql := 'DELETE FROM ONLY ' || table_name || '
-                           WHERE (' || array_to_string(pkey_fields, ',') || ') = any(ARRAY[' || pkey_vals ||']);';
-            RAISE NOTICE 'delete data sql: %%', delete_sql;
+                           WHERE (' || array_to_string(pkey_fields, ',') || ') = any(ARRAY[' || pkeys_str ||']);';
+            -- RAISE NOTICE 'delete data sql: %%', delete_sql;
             EXECUTE delete_sql;
             
             GET DIAGNOSTICS moved := ROW_COUNT;
+            -- raise notice 'deleted count: %%', moved;
             
-            EXIT WHEN moved < count;
-            offset := offset + count;
+            total_moved := total_moved + moved;
+            EXIT main_loop WHEN total_moved = max;
+            EXIT partition_loop WHEN moved < count;
         END LOOP;
     END LOOP;
+    RETURN total_moved;
 END;
-$$ language plpgsql;       
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION move_partition_data(table_name text, part_col text, count integer)
+    RETURNS integer AS $$
+    SELECT move_partition_data($1, $2, $3, 'Infinity')
+$$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION %(table_name)s_ins_func(rec %(table_name)s)
     RETURNS %(table_name)s AS $$
