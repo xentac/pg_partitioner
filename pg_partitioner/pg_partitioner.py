@@ -85,7 +85,7 @@ class DatePartitioner(DBScript):
         g.add_option('-i', '--ignore_errors', action="store_true", default=False,
                      help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
         g.add_option('-m', '--migrate', action="callback", default=0, callback=self.migrate_opt_callback, dest="migrate",
-                     help="Migrate any data in the parent table in to available partitions.  This is done by repeatedly moving X rows from the parent down until all rows have been processed where X is an optional argment to this option that defaults to 100.  Any rows for which no valid child table exists are left in the parent.")
+                     help="Migrate any data in the parent table in to available partitions.  This is done by repeatedly moving X rows from the parent down until all rows have been processed where X is an optional argment to this option that defaults to 1000.  Any rows for which no valid child table exists are left in the parent.")
         g.add_option('-f', '--fkeys', action="store_true", default=False,
                     help="Include building any fkeys present on the parent on the partitions.")
                      
@@ -99,7 +99,7 @@ class DatePartitioner(DBScript):
             value = int(parser.rargs[0])
             del parser.rargs[0]
         except (ValueError, IndexError):
-            value = 100
+            value = 1000
             
         setattr(parser.values, option.dest, value)
         
@@ -187,11 +187,11 @@ class DatePartitioner(DBScript):
         that already exists
         '''
         constraints_str = self.get_constraintdefs_str()
-        idxs_str, idx_count = self.get_indexdefs_str()
         
         if self.opts.fkeys:
             constraints_str = constraints_str + self.get_fkeydefs_str()
         
+        built_partitions = []
         end_points = (self.opts.start, self.nextInterval(self.opts.start))
         while True:
             if int(end_points[0]) > int(self.opts.end):
@@ -206,8 +206,7 @@ class DatePartitioner(DBScript):
                         (part_table, constraints_str, self.ts_column, 
                          end_points[0], self.ts_column, end_points[1], self.qualified_table_name))
                 
-                if idxs_str:
-                    self.curs.execute(idxs_str % ((end_points[0], end_points[1])*idx_count*2))
+                built_partitions.append(part_table)
             except psycopg2.ProgrammingError, e:
                 print e,
                 if not self.opts.ignore_errors:
@@ -215,8 +214,20 @@ class DatePartitioner(DBScript):
                     sys.exit(1)
                 print 'Ignoring error.'
                 self.curs.execute('ROLLBACK TO SAVEPOINT save;')
-                
+            
             end_points = (end_points[1], self.nextInterval(end_points[1]))
+        
+        return built_partitions
+    
+    def build_indexes(self, partitions):
+        idxs_str, idx_count = self.get_indexdefs_str()
+        
+        if idxs_str:
+            end_points_re = re.compile(r'%s_(\d*)_(\d*)' % self.table_name)
+            for part in partitions:
+                m = end_points_re.search(part)
+                end_points = m.groups(1)
+                self.curs.execute(idxs_str % ((end_points[0], end_points[1])*idx_count*2))
     
     def set_trigger_func(self):
         '''
@@ -270,10 +281,12 @@ class DatePartitioner(DBScript):
                 self.set_trigger_func()
         
                 # build the partitions
-                self.create_partitions()
+                built_partitions = self.create_partitions()
                 
             if self.opts.migrate:
                 self.move_data_down()
+            
+            self.build_indexes(built_partitions)
             
             self.commit()
         except Exception, e:
