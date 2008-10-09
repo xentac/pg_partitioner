@@ -1,10 +1,12 @@
+DROP SCHEMA IF EXISTS partitioner CASCADE;
+CREATE SCHEMA partitioner;
 
-CREATE OR REPLACE FUNCTION quote_nullable(val anyelement)
+CREATE OR REPLACE FUNCTION partitioner.quote_nullable(val anyelement)
     RETURNS text AS $$
     SELECT COALESCE(quote_literal($1), 'NULL');
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION quote_array_literals(arr anyarray)
+CREATE OR REPLACE FUNCTION partitioner.quote_array_literals(arr anyarray)
     RETURNS text[] AS $$
 DECLARE
     i int;
@@ -18,7 +20,24 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION get_table_partitions(text)
+CREATE OR REPLACE FUNCTION partitioner.column_is_indexed(column_name text, table_name text)
+    RETURNS boolean AS $$
+DECLARE
+    tmp record;
+BEGIN
+    PERFORM 1
+    FROM pg_attribute a, pg_index i
+    WHERE a.attname=column_name AND a.attrelid=table_name::regclass
+        AND a.attrelid=i.indrelid AND i.indkey[0]=a.attnum;
+        
+    IF FOUND THEN
+        RETURN TRUE;
+    END IF;
+    RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION partitioner.get_table_partitions(text)
     RETURNS SETOF text AS $$
     SELECT n.nspname || '.' || t.relname::text
     FROM pg_class t, pg_namespace n, pg_inherits i
@@ -28,7 +47,7 @@ CREATE OR REPLACE FUNCTION get_table_partitions(text)
     ORDER BY relname
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION get_table_pkey_fields(table_name text)
+CREATE OR REPLACE FUNCTION partitioner.get_table_pkey_fields(table_name text)
     RETURNS text[] AS $$
     SELECT ARRAY(SELECT a.attname::text
                  FROM pg_constraint c, pg_attribute a
@@ -36,7 +55,7 @@ CREATE OR REPLACE FUNCTION get_table_pkey_fields(table_name text)
                     AND c.contype='p' AND c.conrelid=$1::regclass)
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION move_partition_data(table_name text, part_col text, count integer, max real)
+CREATE OR REPLACE FUNCTION partitioner.move_partition_data(table_name text, part_col text, count integer, max real)
     RETURNS integer AS $$
 DECLARE
     bounds text[];
@@ -52,7 +71,7 @@ DECLARE
     total_moved integer DEFAULT 0;
     offset integer;
 BEGIN
-    SELECT * FROM get_table_pkey_fields(table_name) INTO pkey_fields;
+    SELECT * FROM partitioner.get_table_pkey_fields(table_name) INTO pkey_fields;
     
     -- make the returning clause
     FOR i IN 1 .. array_upper(pkey_fields, 1)
@@ -62,7 +81,7 @@ BEGIN
     
     <<main_loop>>
     FOR partition IN
-        SELECT * FROM get_table_partitions(table_name)
+        SELECT * FROM partitioner.get_table_partitions(table_name)
     LOOP
         -- raise notice 'moving data for partition: %%', partition;
         SELECT array[substring(partition from '^'||table_name||'_([0-9]*)_[0-9]*$'),
@@ -125,7 +144,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION move_partition_data(table_name text, part_col text, count integer)
+CREATE OR REPLACE FUNCTION partitioner.move_partition_data(table_name text, part_col text, count integer)
     RETURNS integer AS $$
-    SELECT move_partition_data($1, $2, $3, 'Infinity')
+    SELECT partitioner.move_partition_data($1, $2, $3, 'Infinity'::real)
 $$ LANGUAGE sql;

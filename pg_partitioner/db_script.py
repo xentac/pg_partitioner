@@ -101,7 +101,7 @@ class DBScript(object):
         except psycopg2.Error, e:
             raise e
     
-    def  commit(self):
+    def  finish(self):
         if self.opts.test:
             print 'Rolling back test run.'
             self.con.rollback()

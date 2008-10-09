@@ -103,7 +103,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.runTableValidations(cmd, '20080101', '20090101', '1 month')
     
     def testParentGetsInsertTrigger(self):
-        cmd = script+" -u month foo val_ts"
+        cmd = script+" -u month -m foo val_ts"
         self.callproc(cmd)
         
         self.assertTableHasTrigger('foo', 'foo_partition_trigger', before=True, 

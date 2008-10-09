@@ -6,14 +6,6 @@ from optparse import OptionGroup
 from db_script import DBScript
 from util_funcs import *
 
-trig_check_sql = \
-'''
-SELECT 1
-FROM pg_trigger t
-WHERE t.tgrelid='%(table_name)s'::regclass
-    AND t.tgname='%(base_table_name)s_partition_trigger';
-'''
-
 def_table_schema = \
 '''
 SELECT n.nspname
@@ -26,21 +18,14 @@ class DatePartitioner(DBScript):
     def __init__(self, args):
         super(DatePartitioner, self).__init__('DatePartitioner', args)
         
-        if self.args[0].find('.') > -1:
-            self.qualified_table_name = self.args[0]
-            self.table_name = self.args[0].split('.')[1]
-        else:
-            self.curs.execute(def_table_schema, (self.args[0],))
-            self.qualified_table_name = self.curs.fetchone()[0]+'.'+self.args[0]
-            self.table_name = self.args[0]
-        self.ts_column = self.args[1]
-    
     def init_optparse(self):
         usage = "%prog [options] TABLE PARTITION_FIELD"
         parser = super(DatePartitioner, self).init_optparse(usage)
         
         g = OptionGroup(parser, "Partitioning options", 
                         "Ways to customize the number of partitions and/or the range of each.  Nothing is created if none of these is used.  This is useful for making table paritioning a two step process: 1. Create the partitions using the below options.  2. Migrate the data from the parent table into the new partitions using the above -m option.")
+        g.add_option('--schema', action='store_true', default=False,
+                     help="Forces the partitioner schema to be loaded.  Can be run as the only non-connection option with no arguments.")
         g.add_option('-u', '--units', dest="units", metavar='UNIT',
                      help="A valid PG unit for the column partitioned on.  Defaults to month for timestamp/date columns and 1 for integer column types")
         g.add_option('--scale', type='int', metavar='COUNT',
@@ -73,6 +58,9 @@ class DatePartitioner(DBScript):
         
     
     def validate_opts(self):
+        if self.opts.schema and len(self.args) == 0:
+            return
+            
         if len(self.args) < 2:
             self.parser.error("date_partitioner.py requires both a table name and timestamp field name on that table as arguments.")
             
@@ -83,6 +71,27 @@ class DatePartitioner(DBScript):
         if not self.col_type:
             self.parser.error("%s does not exist on %s." % (self.args[1], self.args[0]))
         self.set_range_vars()
+    
+    def table_is_partitioned(self):
+        self.curs.execute('SELECT partitioner.get_table_partitions(%s)', (self.qualified_table_name,))
+        if self.curs.rowcount:
+            return True
+        return False
+    
+    def table_has_partition_trig(self):
+        trig_check_sql = \
+        '''
+        SELECT 1
+        FROM pg_trigger t
+        WHERE t.tgrelid='%s'::regclass
+            AND t.tgname='%s_partition_trigger';
+        '''
+        
+        self.curs.execute(trig_check_sql % (self.qualified_table_name, self.table_name))
+        if self.curs.rowcount:
+            return True
+        return False
+        
     
     def set_range_vars(self):
         def_dates_sql = \
@@ -222,6 +231,13 @@ class DatePartitioner(DBScript):
         Uses the template date_part_trig.tpl.sql to build out a trigger function
         for the parent table if it's not already there
         '''
+        if not self.table_is_partitioned():
+            print '%s has not had partitions created for it!'
+            sys.exit()
+        
+        if self.table_has_partition_trig():
+            return
+            
         create_trig_sql = \
         '''
         CREATE TRIGGER %(base_table_name)s_partition_trigger BEFORE INSERT OR UPDATE
@@ -240,10 +256,8 @@ class DatePartitioner(DBScript):
              'col_type': self.col_type
         }
         self.curs.execute(funcs_sql % d)
-            
-        self.curs.execute(trig_check_sql % d)
-        if not self.curs.fetchone():
-            self.curs.execute(create_trig_sql % d)
+        
+        self.curs.execute(create_trig_sql % d)
     
     def move_data_down(self):
         '''
@@ -252,7 +266,7 @@ class DatePartitioner(DBScript):
         '''
         move_down_sql = \
         '''
-        SELECT move_partition_data('%(table_name)s', '%(ts_column)s', %(limit)s);
+        SELECT partitioner.move_partition_data('%(table_name)s', '%(ts_column)s', %(limit)s);
         '''
         
         d = {'table_name': self.qualified_table_name,
@@ -261,10 +275,19 @@ class DatePartitioner(DBScript):
              'limit': self.opts.migrate
             }
         
-        self.curs.execute(trig_check_sql % d)
-        if not self.curs.fetchone():
-            print '%s is not partitioned.' % self.qualified_table_name
-            sys.exit(1)
+        # if the partition column isn't indexed prompt before continuing...
+        self.curs.execute("SELECT partitioner.column_is_indexed('%(ts_column)s', '%(table_name)s')" % d)
+        if not self.curs.fetchone()[0]:
+            while True:
+                proceed = raw_input('%(base_table_name)s.%(ts_column)s is not indexed, this can seriously slow down data migration, proceed? (y/n):  ' % d)
+                if proceed not in ['y', 'n', 'Y', 'N', 'yes', 'no', 'Yes', 'No']:
+                    print 'Invalid input: ' + proceed
+                    continue
+                if proceed in ['n', 'N', 'no', 'No']:
+                    sys.exit()
+                break
+        
+        self.set_trigger_func()
             
         self.curs.execute(move_down_sql % d)
         moved = self.curs.fetchone()[0]
@@ -272,19 +295,34 @@ class DatePartitioner(DBScript):
         
         # self.curs.execute('TRUNCATE %s;' % self.qualified_table_name)
     
-    def load_plpgsql_funcs(self):
-        tpl_path = os.path.dirname(os.path.realpath(__file__))
-        funcs_sql = open(tpl_path+'/pg_partitioner.sql').read()
-        self.curs.execute(funcs_sql)
+    def load_partitioner_schema(self):
+        schema_check_sql = "SELECT 1 FROM pg_namespace WHERE nspname='partitioner';"
+        self.curs.execute(schema_check_sql)
+        if not self.curs.rowcount or self.opts.schema:
+            tpl_path = os.path.dirname(os.path.realpath(__file__))
+            funcs_sql = open(tpl_path+'/pg_partitioner.sql').read()
+            self.curs.execute(funcs_sql)
+            if self.opts.schema and len(self.args) == 0:
+                self.finish()
+                sys.exit()
         
     def work(self):
         super(DatePartitioner, self).work()
+        
+        self.load_partitioner_schema()
+        
+        if self.args[0].find('.') > -1:
+            self.qualified_table_name = self.args[0]
+            self.table_name = self.args[0].split('.')[1]
+        else:
+            self.curs.execute(def_table_schema, (self.args[0],))
+            self.qualified_table_name = self.curs.fetchone()[0]+'.'+self.args[0]
+            self.table_name = self.args[0]
+        self.ts_column = self.args[1]
+            
         try:
-            self.load_plpgsql_funcs()
             self.opts.create = True
             if self.opts.create:
-                self.set_trigger_func()
-        
                 # build the partitions
                 built_partitions = self.create_partitions()
                 
@@ -293,7 +331,7 @@ class DatePartitioner(DBScript):
             
             self.build_indexes(built_partitions)
             
-            self.commit()
+            self.finish()
         except Exception, e:
             print 'Last query: %s' % self.curs.query
             raise

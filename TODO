@@ -1,0 +1,3 @@
+* Deal with fkeys referencing the table being partitioned
+* Refactor move_partion_data plpgsql func
+* Add comments to plpgsql functions
