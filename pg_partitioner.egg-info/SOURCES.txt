@@ -1,8 +1,10 @@
 LICENSE
+TODO
 setup.cfg
 setup.py
 pg_partitioner/__init__.py
 pg_partitioner/db_script.py
+pg_partitioner/fkey_trig.tpl.sql
 pg_partitioner/pg_partitioner.py
 pg_partitioner/pg_partitioner.sql
 pg_partitioner/range_part_trig.tpl.sql

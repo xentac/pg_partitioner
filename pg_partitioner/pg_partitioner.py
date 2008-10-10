@@ -42,8 +42,8 @@ class DatePartitioner(DBScript):
                      help="A valid date string for the start date for the partitions.  If used with --units this will default to the oldest DATE_FIELD value in the table truncated to --units, else will truncate to day.")
         g.add_option('-e', '--end', 
                      help="A valid date string for the end date of the partitions.  Using --unit will force this be rounded to the nearest --unit value based from --start after --end. Defaults to the current date.")
-        g.add_option('-i', '--ignore_errors', action="store_true", default=False,
-                     help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
+        # g.add_option('-i', '--ignore_errors', action="store_true", default=False,
+        #              help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
         g.add_option('-m', '--migrate', action="callback", default=1000, callback=self.migrate_opt_callback, dest="migrate",
                      help="Valid for the migrate stage.  Sets X where X is the # of rows to successively move from the parent to partition tables until all rows (that can be) have been moved, defaults to 1000.  Any rows for which no valid child table exists are left in the parent.")
         g.add_option('-f', '--fkeys', action="store_true", default=False,
@@ -157,16 +157,42 @@ class DatePartitioner(DBScript):
             return self.curs.fetchone()[0]
         elif self.short_type == 'int':
             return str(int(val) + int(self.opts.units))
-    
-    def get_constraintdefs_str(self):
-        constraints = get_constraint_defs(self.curs, self.qualified_table_name)
-        constraints = '' if not constraints else ','.join(constraints)+','
         
-        if self.opts.fkeys:
-            fkeys = get_fkey_defs(self.curs, self.qualified_table_name)
-            constraints = constraints + ('' if not fkeys else ','.join(fkeys)+',')
-        return constraints
-    
+    def create_partitions(self):
+        '''
+        Create the child partitions, bails out if it encounters a partition
+        that already exists
+        '''
+        create_part_sql = \
+        '''
+        CREATE TABLE %s (
+            CHECK (%s >= '%s' AND %s < '%s')
+        ) INHERITS (%s);
+        '''
+        
+        built_partitions = []
+        end_points = (self.opts.start, self.nextInterval(self.opts.start))
+        print end_points
+        while True:
+            if int(end_points[0]) > int(self.opts.end):
+                break
+            try:
+                self.curs.execute('SAVEPOINT create_table_save;')
+                    
+                partition = '%s_%s_%s' % (self.qualified_table_name, end_points[0], end_points[1])
+                print 'Creating ' + partition
+                self.curs.execute(create_part_sql % 
+                        (partition, self.part_column, 
+                         end_points[0], self.part_column, end_points[1], self.qualified_table_name))
+            except psycopg2.ProgrammingError, e:
+                if e.message.strip().endswith('already exists'):
+                    self.curs.execute('ROLLBACK TO SAVEPOINT create_table_save;')
+            
+            end_points = (end_points[1], self.nextInterval(end_points[1]))
+            self.partitions.append(partition)
+        self.partitions = list(set(self.partitions))
+        self.partitions.sort()
+
     def get_indexdefs_str(self):
         idxs_sql = ''
         idx_count = 0
@@ -183,67 +209,16 @@ class DatePartitioner(DBScript):
             idxs_sql += idx+';'
         return idxs_sql, idx_count
     
-    def get_fkeydefs_str(self):
-        fkeys = get_fkey_defs(self.curs, self.qualified_table_name)
-        return '' if not fkeys else ','.join(fkeys)+','
-        
-    def create_partitions(self):
-        '''
-        Create the child partitions, bails out if it encounters a partition
-        that already exists
-        '''
-        create_part_sql = \
-        '''
-        CREATE TABLE %s (
-            %s
-            CHECK (%s >= '%s' AND %s < '%s')
-        ) INHERITS (%s);
-        '''
-        
-        constraints_str = self.get_constraintdefs_str()
-        
-        if self.opts.fkeys:
-            constraints_str = constraints_str + self.get_fkeydefs_str()
-        
-        built_partitions = []
-        end_points = (self.opts.start, self.nextInterval(self.opts.start))
-        while True:
-            if int(end_points[0]) > int(self.opts.end):
-                break
-            try:
-                if self.opts.ignore_errors:
-                    self.curs.execute('SAVEPOINT create_table_save;')
-                    
-                part_table = '%s_%s_%s' % (self.qualified_table_name, end_points[0], end_points[1])
-                print 'Creating ' + part_table
-                self.curs.execute(create_part_sql % 
-                        (part_table, constraints_str, self.part_column, 
-                         end_points[0], self.part_column, end_points[1], self.qualified_table_name))
-                
-                built_partitions.append(part_table)
-            except psycopg2.ProgrammingError, e:
-                print e,
-                if not self.opts.ignore_errors:
-                    print 'Last query: %s' % self.curs.query
-                    sys.exit(1)
-                print 'Ignoring error.'
-                self.curs.execute('ROLLBACK TO SAVEPOINT create_table_save;')
-            
-            end_points = (end_points[1], self.nextInterval(end_points[1]))
-        
-        return built_partitions
-    
     def build_indexes(self):
-        self.curs.execute('SELECT partitioner.get_table_partitions(%s);', (self.qualified_table_name,))
-        if not self.curs.rowcount:
-            print '%s has not had any partitions created for it.' % self.qualified_table_name
+        if not self.partitions:
+            print '%s has not had any partitions created for it!' % self.qualified_table_name
             sys.exit()
-        partitions = [row[0] for row in self.curs.fetchall()]
+            
         idxs_str, idx_count = self.get_indexdefs_str()
         
         if idxs_str:
             end_points_re = re.compile(r'%s_(\d*)_(\d*)' % self.table_name)
-            for part in partitions:
+            for part in self.partitions:
                 self.curs.execute('SAVEPOINT idx_create_save;')
                 m = end_points_re.search(part)
                 end_points = m.groups(1)
@@ -252,39 +227,104 @@ class DatePartitioner(DBScript):
                 except psycopg2.ProgrammingError, e:
                     if e.message.strip().endswith('already exists'):
                         self.curs.execute('ROLLBACK TO SAVEPOINT idx_create_save')
+
+    def get_constraintdefs(self):
+        constraints = []
+        for constraint_def in get_constraint_defs(self.curs, self.qualified_table_name):
+            constraints.append('ALTER TABLE %s_%%s_%%s ADD %s;' % (self.qualified_table_name, constraint_def))
+
+        if self.opts.fkeys:
+            for fkey_def in get_fkey_defs(self.curs, self.qualified_table_name):
+                constraints.append('ALTER TABLE %s_%%s_%%s ADD %s' % (self.qualified_table_name, fkey_def))
+        return constraints
     
+    def build_constraints(self):
+        if not self.partitions:
+            print '%s has not had any partitions created for it!' % self.qualified_table_name
+            sys.exit()
+            
+        constraints_defs = self.get_constraintdefs()
+        
+        if constraints_defs:
+            end_points_re = re.compile(r'%s_(\d*)_(\d*)' % self.table_name)
+            for part in self.partitions:
+                self.curs.execute('SAVEPOINT constraint_create_save;')
+                m = end_points_re.search(part)
+                end_points = m.groups(1)
+                for con in constraints_defs:
+                    try:
+                        self.curs.execute(con % (end_points[0], end_points[1]))
+                    except psycopg2.ProgrammingError, e:
+                        m = e.message.strip()
+                        if m.strip().endswith('already existms') or m.startswith('multiple primary keys'):
+                            self.curs.execute('ROLLBACK TO SAVEPOINT constraint_create_save')
+        
     def set_trigger_func(self):
         '''
         Uses the template date_part_trig.tpl.sql to build out a trigger function
         for the parent table if it's not already there
         '''
-        if not self.table_is_partitioned():
+        if not self.partitions:
             print '%s has not had any partitions created for it!' % self.qualified_table_name
             sys.exit()
         
         if self.table_has_partition_trig():
             return
             
-        create_trig_sql = \
+        part_trig_sql = \
         '''
         CREATE TRIGGER %(base_table_name)s_partition_trigger BEFORE INSERT OR UPDATE
             ON %(table_name)s FOR EACH ROW
             EXECUTE PROCEDURE %(table_name)s_ins_trig();
         '''
-
-        tpl_path = os.path.dirname(os.path.realpath(__file__))
-        funcs_sql = open(tpl_path+'/range_part_trig.tpl.sql').read()
-        table_atts = table_attributes(self.curs, self.qualified_table_name)
+        
         d = {'table_name': self.qualified_table_name,
              'base_table_name': self.table_name,
-             'part_column': self.part_column,
-             'table_atts': ','.join(table_atts),
-             'atts_vals': " || ',' || ".join(["quote_nullable(rec.%s)" % att for att in table_atts]),
-             'col_type': self.col_type
         }
-        self.curs.execute(funcs_sql % d)
-        
-        self.curs.execute(create_trig_sql % d)
+        self.curs.execute(part_trig_sql % d)
+    
+    def check_referencing_fkeys(self):
+        refkeys_sql = '''
+        SELECT DISTINCT ON (c.conname) n.nspname || '.' || t2.relname, c.conname, 
+            partitioner.get_attributes_str_key_pos(t2.relname, c.conkey) as cols,
+            partitioner.get_attributes_str_key_pos(t1.relname, c.confkey) as refcols
+        FROM pg_class t1, pg_class t2, pg_constraint c, pg_namespace n
+        WHERE c.confrelid=t1.oid AND t1.oid=%s::regclass AND c.conrelid=t2.oid
+            AND t2.relnamespace=n.oid;
+        '''
+        fkey_trig_sql = \
+        '''
+        CREATE TRIGGER %(fkey_name)s_fkey_trigger BEFORE INSERT OR UPDATE
+            ON %(table_name)s FOR EACH ROW
+            EXECUTE PROCEDURE %(fkey_name)s_fkey_trig();
+        '''
+        fkey_tpl_sql = self.read_file('/fkey_trig.tpl.sql')
+        self.curs.execute(refkeys_sql, (self.table_name,))
+        for ret in self.curs.fetchall():
+            print '\nFound fkey %s on %s(%s) referencing %s(%s)' % (ret[1], ret[0], ret[2], self.table_name, ret[3])
+            while True:
+                print 'Would you like to:'
+                print '1. Drop it'
+                print '2. Replace it with a trigger'
+                print '3. Abort'
+                choice = raw_input()
+                if choice not in ['1', '2', '3']:
+                    print 'Invalid choice'
+                break
+            if choice == '3':
+                sys.exit()
+            self.curs.execute('ALTER TABLE %s DROP CONSTRAINT %s;' % (ret[0], ret[1]))
+            if choice == '2':
+                d = {'table_name': ret[0],
+                     'ref_table_name': self.qualified_table_name,
+                     'fields': ret[2],
+                     'new_vals': " || ' , ' || ".join(['NEW.'+field for field in ret[3].split(',')]),
+                     'fkey_name': '%s_%s' % (ret[0].split('.')[1], ret[2].replace(',', '_'))
+                    }
+                print d['fields']
+                self.curs.execute(fkey_tpl_sql % d)
+                self.curs.execute(fkey_trig_sql % d)
+                
     
     def move_data_down(self):
         '''
@@ -306,7 +346,7 @@ class DatePartitioner(DBScript):
         self.curs.execute("SELECT partitioner.column_is_indexed('%(part_column)s', '%(table_name)s')" % d)
         if not self.curs.fetchone()[0]:
             while True:
-                proceed = raw_input('%(base_table_name)s.%(part_column)s is not indexed, this can seriously slow down data migration, proceed? (y/n):  ' % d)
+                proceed = raw_input('\n%(base_table_name)s.%(part_column)s is not indexed, this can seriously slow down data migration, proceed? (y/n):  ' % d)
                 if proceed not in ['y', 'n', 'Y', 'N', 'yes', 'no', 'Yes', 'No']:
                     print 'Invalid input: ' + proceed
                     continue
@@ -314,7 +354,8 @@ class DatePartitioner(DBScript):
                     sys.exit()
                 break
         
-        self.set_trigger_func()
+        self.check_referencing_fkeys()
+        self.load_templated_funcs()
             
         self.curs.execute(move_down_sql % d)
         moved = self.curs.fetchone()[0]
@@ -322,16 +363,33 @@ class DatePartitioner(DBScript):
         
         # self.curs.execute('TRUNCATE %s;' % self.qualified_table_name)
     
+    def read_file(self, tpl):
+        tpl_path = os.path.dirname(os.path.realpath(__file__))
+        return open(tpl_path+'/'+tpl).read()
+    
     def load_partitioner_schema(self):
         schema_check_sql = "SELECT 1 FROM pg_namespace WHERE nspname='partitioner';"
         self.curs.execute(schema_check_sql)
         if not self.curs.rowcount or self.opts.schema:
-            tpl_path = os.path.dirname(os.path.realpath(__file__))
-            funcs_sql = open(tpl_path+'/pg_partitioner.sql').read()
-            self.curs.execute(funcs_sql)
+            schema_sql = self.read_file('pg_partitioner.sql')
+
+            self.curs.execute(schema_sql)
             if self.opts.schema and len(self.args) == 0:
                 self.finish()
                 sys.exit()
+    
+    def load_templated_funcs(self):
+        funcs_tpl_sql = self.read_file('range_part_trig.tpl.sql')
+
+        table_atts = table_attributes(self.curs, self.qualified_table_name)
+        d = {'table_name': self.qualified_table_name,
+             'base_table_name': self.table_name,
+             'part_column': self.part_column,
+             'table_atts': ','.join(table_atts),
+             'atts_vals': " || ',' || ".join(["quote_nullable(rec.%s)" % att for att in table_atts]),
+             'col_type': self.col_type
+        }
+        self.curs.execute(funcs_tpl_sql % d)
         
     def work(self):
         super(DatePartitioner, self).work()
@@ -346,7 +404,9 @@ class DatePartitioner(DBScript):
             self.qualified_table_name = self.curs.fetchone()[0]+'.'+self.args[0]
             self.table_name = self.args[0]
         self.part_column = self.args[1]
-            
+        
+        self.curs.execute("SELECT partitioner.get_table_partitions('%s')" % self.qualified_table_name)
+        self.partitions = [] if not self.curs.rowcount else [res[0] for res in self.curs.fetchall()]
         try:
             if self.run_stage('create'):
                 # build the partitions
@@ -356,7 +416,9 @@ class DatePartitioner(DBScript):
                 self.move_data_down()
             
             if self.run_stage('post'):
+                self.set_trigger_func()
                 self.build_indexes()
+                self.build_constraints()
             
             self.finish()
         except Exception, e:

@@ -55,6 +55,28 @@ CREATE OR REPLACE FUNCTION partitioner.get_table_pkey_fields(table_name text)
                     AND c.contype='p' AND c.conrelid=$1::regclass)
 $$ LANGUAGE sql;
 
+CREATE OR REPLACE FUNCTION partitioner.get_attributes_str_key_pos(table_name text, idxs int[])
+    RETURNS text AS $$
+DECLARE
+    attname_sql text;
+    column_name text;
+    attnames text[];
+    i int;
+BEGIN
+    FOR i IN 1 .. array_upper(idxs, 1)
+    LOOP
+        attname_sql := 'SELECT attname
+                        FROM pg_attribute
+                        WHERE attnum=' || quote_literal(idxs[i]) || '
+                        AND attrelid=''' || table_name || '''::regclass;';
+        EXECUTE attname_sql
+        INTO column_name;
+        attnames[i] := column_name;
+    END LOOP;
+    RETURN array_to_string(attnames, ',');
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION partitioner.move_partition_data(table_name text, part_col text, count integer, max real)
     RETURNS integer AS $$
 DECLARE
@@ -83,7 +105,7 @@ BEGIN
     FOR partition IN
         SELECT * FROM partitioner.get_table_partitions(table_name)
     LOOP
-        -- raise notice 'moving data for partition: %%', partition;
+        -- raise notice 'moving data for partition: %', partition;
         SELECT array[substring(partition from '^'||table_name||'_([0-9]*)_[0-9]*$'),
                substring(partition from '^'||table_name||'_[0-9]*_([0-9]*)$')]
         INTO bounds;
@@ -103,23 +125,23 @@ BEGIN
                                 quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || '
                               ORDER BY ' || quote_ident(part_col) || '
                               LIMIT ' || quote_literal(to_move) || ' ';
-            -- RAISE NOTICE 'move data sql: %%', move_data_sql;
+            -- RAISE NOTICE 'move data sql: %', move_data_sql;
             IF max != 'Infinity' THEN
                 move_data_sql := move_data_sql || ' RETURNING ''('' || array_to_string(quote_array_literals(array[' || array_to_string(pkey_fields_conv, ',') || ']), '','') || '')'';';
                 FOR moved_data_pkey IN EXECUTE move_data_sql
                 LOOP
-                    -- RAISE NOTICE 'move data pkey: %%', moved_data_pkey;
+                    -- RAISE NOTICE 'move data pkey: %', moved_data_pkey;
                     pkeys_str := pkeys_str || moved_data_pkey || ',';
                 END LOOP;
             
                 EXIT WHEN NOT FOUND;
                 GET DIAGNOSTICS moved := ROW_COUNT;
-                -- raise notice 'inserted count: %%', moved;
+                -- raise notice 'inserted count: %', moved;
                         
                 pkeys_str := substring(pkeys_str from 1 for char_length(pkeys_str)-1);
                 delete_sql := 'DELETE FROM ONLY ' || table_name || '
                                WHERE (' || array_to_string(pkey_fields, ',') || ') IN (' || pkeys_str ||');';
-                -- RAISE NOTICE 'delete data sql: %%', delete_sql;
+                -- RAISE NOTICE 'delete data sql: %', delete_sql;
                 EXECUTE delete_sql;
             ELSE
                 move_data_sql := move_data_sql || ' OFFSET ' || quote_literal(offset);
@@ -128,7 +150,7 @@ BEGIN
             END IF;
             
             GET DIAGNOSTICS moved := ROW_COUNT;
-            -- raise notice 'deleted count: %%', moved;
+            -- raise notice 'deleted count: %', moved;
             
             total_moved := total_moved + moved;
             EXIT main_loop WHEN total_moved = max;

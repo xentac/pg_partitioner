@@ -91,7 +91,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
 
     
     def testCreates3MonthRangesOnExistingData(self):
-        cmd = script+" -u month --scale 3 foo val_ts"
+        cmd = script+" -u month --scale 3 --stage create foo val_ts"
         self.runTableValidations(cmd, '20070701', '20090101', '3 month')
     
     def testCreatesRangesWithSetEndTs(self):
@@ -103,20 +103,21 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.runTableValidations(cmd, '20080101', '20090101', '1 month')
     
     def testParentGetsInsertTrigger(self):
-        cmd = script+" -u month -m foo val_ts"
+        cmd = script+" -u month --stage all foo val_ts"
         self.callproc(cmd)
         
         self.assertTableHasTrigger('foo', 'foo_partition_trigger', before=True, 
                                         events='insert', row=True)
     
-    def testParentInsertFuncCreated(self):
-        cmd = script+" -u month foo val_ts"
+    def testParentInsertFuncCreated(self):        
+        cmd = script+" -u month --stage all foo val_ts"
         self.callproc(cmd)
+        
         typname = 'trigger' if self.pg_version.startswith('8.3') else '"trigger"'
         self.assertFunctionExists('foo_ins_trig', rettype=typname)
         
     def testParitionSchemaMatchesParentNoFKeys(self):
-        cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
+        cmd = script+" -u month -s 20080101 -e 20080201 --stage all foo val_ts"
         self.runTableValidations(cmd, '20080101', '20080201', '1 month')
         
         for tbl in ['foo_20080101_20080201', 'foo_20080201_20080301']:
@@ -130,7 +131,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
             self.assertTableHasPrimaryKey(tbl, 'id')
     
     def testPartitionSchemaMatchesParentWithFkeys(self):
-        cmd = script+" -u month -s 20080101 -e 20080201 -f foo val_ts"
+        cmd = script+" -u month -s 20080101 -e 20080201 -f --stage all foo val_ts"
         self.runTableValidations(cmd, '20080101', '20080201', '1 month')
         
         for tbl in ['foo_20080101_20080201', 'foo_20080201_20080301']:
@@ -145,8 +146,10 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
             self.assertTableHasFKey(tbl, 'film', tbl+'_id_fkey', 'id')
     
     def testFullRangeMigratesAllData(self):
-        cmd = script+" -u month -m foo val_ts"
-        print cmd
+        cmd = script+" -u month foo val_ts"
+        self.callproc(cmd)
+        
+        cmd = script+" -u month --stage migrate foo val_ts"        
         sts, p = self.callproc(cmd)
         
         sql = "SELECT COUNT(*) FROM foo;"
@@ -161,7 +164,10 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.assertNotEqual(output.find('Moved 7 rows into partitions.'), -1)
     
     def testLimitedRangeKeepsDataInParent(self):
-        cmd = script+" -u month -s 20080101 -e 20080501 -m foo val_ts"
+        cmd = script+" -u month -s 20080101 -e 20080501 foo val_ts"
+        self.callproc(cmd)
+        
+        cmd = script+" -u month -s 20080101 -e 20080501 --stage migrate foo val_ts"
         sts, p = self.callproc(cmd)
         
         sql = "SELECT COUNT(*) FROM foo;"
@@ -176,27 +182,27 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.assertNotEqual(output.find('Moved 4 rows into partitions.'), -1)
         # self.assertNotEqual(output.find('Kept 3 rows in the parent table.'), -1)
     
-    def testExistingTableCreatePassesWithIgnoreFlag(self):
-        cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
-        self.callproc(cmd)
-        
-        cmd = script+" -u month -s 20080115 -e 20080513 foo val_ts -i"
-        
-        output = self.runTableValidations(cmd, '20080101', '20080513', '1 month')
-        self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
-        self.assertEqual(output.count('relation "foo_20080201_20080301" already exists'), 1)
-        self.assertEqual(output.count('Ignoring error.'), 2)
+    # def testExistingTableCreatePassesWithIgnoreFlag(self):
+    #     cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
+    #     self.callproc(cmd)
+    #     
+    #     cmd = script+" -u month -s 20080115 -e 20080513 foo val_ts -i"
+    #     
+    #     output = self.runTableValidations(cmd, '20080101', '20080513', '1 month')
+    #     self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
+    #     self.assertEqual(output.count('relation "foo_20080201_20080301" already exists'), 1)
+    #     self.assertEqual(output.count('Ignoring error.'), 2)
     
-    def testExistingTableCreateFailsWithNoIgnoreFlag(self):
-        cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
-        self.callproc(cmd)
-        
-        cmd = script+" -u month -s 20080115 -e 20080513 foo val_ts"
-        sts, p = self.callproc(cmd)
-        
-        output = p.stdout.read()
-        self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
-        self.failUnlessRaises(self.failureException, self.runTableValidations, cmd, '20080101', '20080501', '1 month')
+    # def testExistingTableCreateFailsWithNoIgnoreFlag(self):
+    #     cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
+    #     self.callproc(cmd)
+    #     
+    #     cmd = script+" -u month -s 20080115 -e 20080513 foo val_ts"
+    #     sts, p = self.callproc(cmd)
+    #     
+    #     output = p.stdout.read()
+    #     self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
+    #     self.failUnlessRaises(self.failureException, self.runTableValidations, cmd, '20080101', '20080501', '1 month')
     
     def testRunWithTestFlagDoesntCommit(self):
         cmd = script+" -u month -t foo val_ts"
