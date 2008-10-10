@@ -368,6 +368,7 @@ class DatePartitioner(DBScript):
         return open(tpl_path+'/'+tpl).read()
     
     def load_partitioner_schema(self):
+        print 'Loading paritioner schema in %s database...' % self.opts.database
         schema_check_sql = "SELECT 1 FROM pg_namespace WHERE nspname='partitioner';"
         self.curs.execute(schema_check_sql)
         if not self.curs.rowcount or self.opts.schema:

@@ -2,3 +2,6 @@
 * Add comments to plpgsql functions
 * handle passed count of 0 to move_partition_data
 * fix table name consistency (qualified v. unqualified)
+* post stage should create triggers on child tables -- optional?
+* change default unit for integer partitioning to 10% of range
+* switch to custom catalogs
