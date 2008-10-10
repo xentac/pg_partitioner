@@ -132,7 +132,7 @@ CREATE OR REPLACE FUNCTION partitioner.get_table_pkey_fields(table_name text)
                     AND c.contype='p' AND c.conrelid=$1::regclass)
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_attributes_str_key_pos(table_name text, idxs int[])
+CREATE OR REPLACE FUNCTION partitioner.get_attributes_str_by_attnums(table_name text, attnums int[])
     RETURNS text AS $$
 DECLARE
     attname_sql text;
@@ -140,11 +140,11 @@ DECLARE
     attnames text[];
     i int;
 BEGIN
-    FOR i IN 1 .. array_upper(idxs, 1)
+    FOR i IN 1 .. array_upper(attnums, 1)
     LOOP
         attname_sql := 'SELECT attname
                         FROM pg_attribute
-                        WHERE attnum=' || quote_literal(idxs[i]) || '
+                        WHERE attnum=' || quote_literal(attnums[i]) || '
                         AND attrelid=''' || table_name || '''::regclass;';
         EXECUTE attname_sql
         INTO column_name;
