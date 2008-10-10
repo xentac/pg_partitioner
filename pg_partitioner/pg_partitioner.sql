@@ -43,7 +43,34 @@ BEGIN
     END IF;
     EXECUTE check_sql INTO table_name2;
     RETURN table_name2;
-END
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION get_column_type(table_name text, column_name text)
+    RETURNS text AS $$
+DECLARE
+    q_table_name text;
+    column_type text;
+    check_sql text;
+BEGIN
+    SELECT table_exists(table_name) INTO q_table_name;
+    IF q_table_name IS NULL THEN
+        RAISE EXCEPTION 'Table % does not exist (at least not in the current search path).', table_name;
+    END IF;
+    
+    check_sql := 'SELECT pg_catalog.format_type(a.atttypid, a.atttypmod)
+                  FROM pg_attribute a
+                  WHERE a.attrelid = ' || quote_literal(q_table_name) || '::regclass
+                    AND a.attname=' || quote_literal(column_name) || ';';
+    EXECUTE check_sql
+    INTO column_type;
+    
+    IF column_type IS NULL THEN
+        RAISE EXCEPTION 'Could not find column % on table %.', column_name, q_table_name;
+    END IF;
+    
+    RETURN column_type;
+END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION partitioner.column_is_indexed(column_name text, table_name text)
