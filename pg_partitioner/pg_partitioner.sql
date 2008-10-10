@@ -20,6 +20,32 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION table_exists(table_name text)
+    RETURNS text AS $$
+DECLARE
+    dot_pos int;
+    check_sql text;
+    schema_name text;
+    table_name2 text;
+BEGIN
+    check_sql := 'SELECT n.nspname || ''.'' || t.relname
+                  FROM pg_class t, pg_namespace n
+                  WHERE t.relkind=''r'' AND t.relnamespace=n.oid
+                  ';
+    SELECT position('.' in table_name) INTO dot_pos;
+    IF dot_pos = 0 THEN
+        check_sql := check_sql || ' AND relname=' || quote_literal(table_name) || ' AND pg_table_is_visible(t.oid);';
+    ELSE
+        SELECT split_part(table_name, '.', 1) INTO schema_name;
+        SELECT split_part(table_name, '.', 2) INTO table_name2;
+        check_sql := check_sql || ' AND n.nspname=' || quote_literal(schema_name) || '
+                                   AND t.relname=' || quote_literal(table_name2) || ';';
+    END IF;
+    EXECUTE check_sql INTO table_name2;
+    RETURN table_name2;
+END
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION partitioner.column_is_indexed(column_name text, table_name text)
     RETURNS boolean AS $$
 DECLARE
