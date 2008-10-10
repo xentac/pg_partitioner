@@ -78,7 +78,6 @@ CREATE OR REPLACE FUNCTION get_table_constraint_defs(table_name text)
     SELECT pg_get_constraintdef(c.oid)
     FROM pg_constraint c
     WHERE c.conrelid=$1::regclass
-        AND c.contype!='f'
 $$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION partitioner.column_is_indexed(column_name text, table_name text)
