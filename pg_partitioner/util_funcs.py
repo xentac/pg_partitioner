@@ -5,7 +5,7 @@ def table_exists(curs, table_name=''):
     '''
     check_sql = \
     '''
-    SELECT 1
+    SELECT n.nspname || '.' || t.relname
     FROM pg_class t, pg_namespace n
     WHERE t.relname=%s AND t.relkind='r'
         AND t.relnamespace=n.oid
@@ -100,7 +100,7 @@ def normalize_date(curs, date_str, fmt, units='month', diff='0 months'):
     '''
     normalize_date_sql = \
     '''
-    SELECT to_char(date_trunc('month', %s::timestamp + %s), %s);
+    SELECT to_char(date_trunc(%s, %s::timestamp + %s), %s);
     '''
-    curs.execute(normalize_date_sql, (date_str, diff, fmt))
+    curs.execute(normalize_date_sql, (units, date_str, diff, fmt))
     return curs.fetchone()[0]
