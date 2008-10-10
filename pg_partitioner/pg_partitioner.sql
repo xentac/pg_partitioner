@@ -20,7 +20,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION table_exists(table_name text)
+CREATE OR REPLACE FUNCTION partitioner.table_exists(table_name text)
     RETURNS text AS $$
 DECLARE
     dot_pos int;
@@ -46,7 +46,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION get_column_type(table_name text, column_name text)
+CREATE OR REPLACE FUNCTION partitioner.get_column_type(table_name text, column_name text)
     RETURNS text AS $$
 DECLARE
     q_table_name text;
@@ -73,11 +73,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION get_table_constraint_defs(table_name text)
+CREATE OR REPLACE FUNCTION partitioner.get_table_constraint_defs(table_name text)
     RETURNS SETOF text AS $$
     SELECT pg_get_constraintdef(c.oid)
     FROM pg_constraint c
     WHERE c.conrelid=$1::regclass
+$$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION partitioner.get_table_index_defs(table_name text)
+    RETURNS SETOF text AS $$
+    SELECT pg_get_indexdef(i.indexrelid) as def
+    FROM pg_index i
+    WHERE i.indrelid=$1::regclass
+        -- AND i.indisprimary IS NOT TRUE AND i.indisunique IS NOT TRUE
 $$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION partitioner.column_is_indexed(column_name text, table_name text)
