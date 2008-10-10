@@ -88,6 +88,15 @@ CREATE OR REPLACE FUNCTION partitioner.get_table_index_defs(table_name text)
         -- AND i.indisprimary IS NOT TRUE AND i.indisunique IS NOT TRUE
 $$ LANGUAGE sql;
 
+CREATE OR REPLACE FUNCTION partitioner.get_table_attributes(table_name text)
+    RETURNS SETOF text AS $$
+    SELECT a.attname::text
+    FROM pg_attribute a
+    WHERE a.attrelid=$1::regclass
+        AND a.attnum > 0 AND NOT a.attisdropped
+    ORDER BY a.attnum
+$$ LANGUAGE sql;
+
 CREATE OR REPLACE FUNCTION partitioner.column_is_indexed(column_name text, table_name text)
     RETURNS boolean AS $$
 DECLARE
