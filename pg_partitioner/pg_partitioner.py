@@ -321,7 +321,7 @@ class DatePartitioner(DBScript):
                      'new_vals': " || ' , ' || ".join(['NEW.'+field for field in ret[3].split(',')]),
                      'fkey_name': '%s_%s' % (ret[0].split('.')[1], ret[2].replace(',', '_'))
                     }
-                print d['fields']
+                    
                 self.curs.execute(fkey_tpl_sql % d)
                 self.curs.execute(fkey_trig_sql % d)
                 
