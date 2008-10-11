@@ -28,7 +28,7 @@ class DatePartitioner(DBScript):
         parser = super(DatePartitioner, self).init_optparse(usage)
         
         g = OptionGroup(parser, "Partitioning options", 
-                        "Ways to customize the number of partitions and/or the range of each.  Nothing is created if none of these is used.  This is useful for making table paritioning a two step process: 1. Create the partitions using the below options.  2. Migrate the data from the parent table into the new partitions using the above -m option.")
+                        "Ways to customize the number of partitions and/or the range of each.  This is useful for making table paritioning in a three step process: 1. Create the partitions using the below options.  2. Migrate the data from the parent table into the new partitions using the above -m option.  3. Create indexes and constraints on the newly created partition tables.")
         g.add_option('--stage', default='create',
                      help="One of: create, migrate, post, all.  create -> create partition tables, migrate -> migrate data from parent to partitions, post -> create indexes, constraints and, optionally, fkeys on partitions.")
         g.add_option('--schema', action='store_true', default=False,
@@ -44,27 +44,17 @@ class DatePartitioner(DBScript):
                      help="A valid date string for the end date of the partitions.  Using --unit will force this be rounded to the nearest --unit value based from --start after --end. Defaults to the current date.")
         # g.add_option('-i', '--ignore_errors', action="store_true", default=False,
         #              help="When creating tables, ignore any errors instead of rolling completely back. Default: False.")
-        g.add_option('-m', '--migrate', action="callback", default=1000, callback=self.migrate_opt_callback, dest="migrate",
+        g.add_option('--chunk', type='int', default=1000, 
                      help="Valid for the migrate stage.  Sets X where X is the # of rows to successively move from the parent to partition tables until all rows (that can be) have been moved, defaults to 1000.  Any rows for which no valid child table exists are left in the parent.")
         g.add_option('-f', '--fkeys', action="store_true", default=False,
                     help="Include building any fkeys present on the parent on the partitions.")
                      
         parser.add_option_group(g)
         
-        return parser
-    
-    def migrate_opt_callback(self, option, opt_str, value, parser):
-        assert value is None
-        try:
-            value = int(parser.rargs[0])
-            del parser.rargs[0]
-        except (ValueError, IndexError):
-            value = 1000
-            
-        setattr(parser.values, option.dest, value)
-        
+        return parser    
     
     def validate_opts(self):
+        print self.opts
         if self.opts.schema and len(self.args) == 0:
             return
             
@@ -87,7 +77,7 @@ class DatePartitioner(DBScript):
         return True if stages[self.opts.stage] & stages[stage] else False
     
     def table_is_partitioned(self):
-        self.curs.execute('SELECT partitioner.get_table_partitions(%s)', (self.qualified_table_name,))
+        self.curs.execute('SELECT pgpartitioner.get_table_partitions(%s)', (self.qualified_table_name,))
         if self.curs.rowcount:
             return True
         return False
@@ -170,17 +160,21 @@ class DatePartitioner(DBScript):
         ) INHERITS (%s);
         '''
         
-        built_partitions = []
         end_points = (self.opts.start, self.nextInterval(self.opts.start))
-        print end_points
         while True:
             if int(end_points[0]) > int(self.opts.end):
                 break
+                
+            partition = '%s_%s_%s' % (self.qualified_table_name, end_points[0], end_points[1])
+            if partition in self.partitions:
+                print '%s already exists....' % partition
+                end_points = (end_points[1], self.nextInterval(end_points[1]))
+                continue
+                
             try:
                 self.curs.execute('SAVEPOINT create_table_save;')
                     
-                partition = '%s_%s_%s' % (self.qualified_table_name, end_points[0], end_points[1])
-                print 'Creating ' + partition
+                print 'Creating %s...' % partition
                 self.curs.execute(create_part_sql % 
                         (partition, self.part_column, 
                          end_points[0], self.part_column, end_points[1], self.qualified_table_name))
@@ -190,8 +184,8 @@ class DatePartitioner(DBScript):
             
             end_points = (end_points[1], self.nextInterval(end_points[1]))
             self.partitions.append(partition)
-        self.partitions = list(set(self.partitions))
-        self.partitions.sort()
+        # self.partitions = list(set(self.partitions))
+        # self.partitions.sort()
 
     def get_indexdefs_str(self):
         idxs_sql = ''
@@ -286,8 +280,8 @@ class DatePartitioner(DBScript):
     def check_referencing_fkeys(self):
         refkeys_sql = '''
         SELECT DISTINCT ON (c.conname) n.nspname || '.' || t2.relname, c.conname, 
-            partitioner.get_attributes_str_key_pos(t2.relname, c.conkey) as cols,
-            partitioner.get_attributes_str_key_pos(t1.relname, c.confkey) as refcols
+            pgpartitioner.get_attributes_str_by_attnums(t2.relname, c.conkey) as cols,
+            pgpartitioner.get_attributes_str_by_attnums(t1.relname, c.confkey) as refcols
         FROM pg_class t1, pg_class t2, pg_constraint c, pg_namespace n
         WHERE c.confrelid=t1.oid AND t1.oid=%s::regclass AND c.conrelid=t2.oid
             AND t2.relnamespace=n.oid;
@@ -333,17 +327,17 @@ class DatePartitioner(DBScript):
         '''
         move_down_sql = \
         '''
-        SELECT partitioner.move_partition_data('%(table_name)s', '%(part_column)s', %(limit)s);
+        SELECT pgpartitioner.move_partition_data('%(table_name)s', '%(part_column)s', %(limit)s);
         '''
         
         d = {'table_name': self.qualified_table_name,
              'base_table_name': self.table_name,
              'part_column': self.part_column,
-             'limit': self.opts.migrate
+             'limit': self.opts.chunk
             }
         
         # if the partition column isn't indexed prompt before continuing...
-        self.curs.execute("SELECT partitioner.column_is_indexed('%(part_column)s', '%(table_name)s')" % d)
+        self.curs.execute("SELECT pgpartitioner.column_is_indexed('%(part_column)s', '%(table_name)s')" % d)
         if not self.curs.fetchone()[0]:
             while True:
                 proceed = raw_input('\n%(base_table_name)s.%(part_column)s is not indexed, this can seriously slow down data migration, proceed? (y/n):  ' % d)
@@ -368,10 +362,10 @@ class DatePartitioner(DBScript):
         return open(tpl_path+'/'+tpl).read()
     
     def load_partitioner_schema(self):
-        print 'Loading paritioner schema in %s database...' % self.opts.database
-        schema_check_sql = "SELECT 1 FROM pg_namespace WHERE nspname='partitioner';"
+        schema_check_sql = "SELECT 1 FROM pg_namespace WHERE nspname='pgpartitioner';"
         self.curs.execute(schema_check_sql)
         if not self.curs.rowcount or self.opts.schema:
+            print 'Loading pgparitioner schema in %s database...' % self.opts.database
             schema_sql = self.read_file('pg_partitioner.sql')
 
             self.curs.execute(schema_sql)
@@ -387,7 +381,7 @@ class DatePartitioner(DBScript):
              'base_table_name': self.table_name,
              'part_column': self.part_column,
              'table_atts': ','.join(table_atts),
-             'atts_vals': " || ',' || ".join(["quote_nullable(rec.%s)" % att for att in table_atts]),
+             'atts_vals': " || ',' || ".join(["pgpartitioner.quote_nullable(rec.%s)" % att for att in table_atts]),
              'col_type': self.col_type
         }
         self.curs.execute(funcs_tpl_sql % d)
@@ -406,7 +400,8 @@ class DatePartitioner(DBScript):
             self.table_name = self.args[0]
         self.part_column = self.args[1]
         
-        self.curs.execute("SELECT partitioner.get_table_partitions('%s')" % self.qualified_table_name)
+        print 'chunk size: %s' % self.opts.chunk
+        self.curs.execute("SELECT pgpartitioner.get_table_partitions('%s')" % self.qualified_table_name)
         self.partitions = [] if not self.curs.rowcount else [res[0] for res in self.curs.fetchall()]
         try:
             if self.run_stage('create'):

@@ -8,7 +8,7 @@ DECLARE
     ins_sql varchar;
 BEGIN
     FOR partition IN
-        SELECT * FROM get_table_partitions('%(table_name)s')
+        SELECT * FROM pgpartitioner.get_table_partitions('%(table_name)s')
     LOOP
         name_parts := string_to_array(partition, '_');
         upper_dim := array_upper(name_parts, 1);

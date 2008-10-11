@@ -1,12 +1,12 @@
-DROP SCHEMA IF EXISTS partitioner CASCADE;
-CREATE SCHEMA partitioner;
+DROP SCHEMA IF EXISTS pgpartitioner CASCADE;
+CREATE SCHEMA pgpartitioner;
 
-CREATE OR REPLACE FUNCTION partitioner.quote_nullable(val anyelement)
+CREATE OR REPLACE FUNCTION pgpartitioner.quote_nullable(val anyelement)
     RETURNS text AS $$
     SELECT COALESCE(quote_literal($1), 'NULL');
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION partitioner.quote_array_literals(arr anyarray)
+CREATE OR REPLACE FUNCTION pgpartitioner.quote_array_literals(arr anyarray)
     RETURNS text[] AS $$
 DECLARE
     i int;
@@ -14,13 +14,13 @@ DECLARE
 BEGIN
     FOR i IN 1 .. array_upper(arr, 1)
     LOOP
-        ret[i] := quote_literal(arr[i]);
+        ret[i] := quote_nullable(arr[i]);
     END LOOP;
     RETURN ret;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION partitioner.table_exists(table_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.table_exists(table_name text)
     RETURNS text AS $$
 DECLARE
     dot_pos int;
@@ -30,8 +30,8 @@ DECLARE
 BEGIN
     check_sql := 'SELECT n.nspname || ''.'' || t.relname
                   FROM pg_class t, pg_namespace n
-                  WHERE t.relkind=''r'' AND t.relnamespace=n.oid
-                  ';
+                  WHERE t.relkind=''r'' AND t.relnamespace=n.oid';
+                  
     SELECT position('.' in table_name) INTO dot_pos;
     IF dot_pos = 0 THEN
         check_sql := check_sql || ' AND relname=' || quote_literal(table_name) || ' AND pg_table_is_visible(t.oid);';
@@ -46,7 +46,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_column_type(table_name text, column_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_column_type(table_name text, column_name text)
     RETURNS text AS $$
 DECLARE
     q_table_name text;
@@ -73,14 +73,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_table_constraint_defs(table_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_table_constraint_defs(table_name text)
     RETURNS SETOF text AS $$
     SELECT pg_get_constraintdef(c.oid)
     FROM pg_constraint c
     WHERE c.conrelid=$1::regclass
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_table_index_defs(table_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_table_index_defs(table_name text)
     RETURNS SETOF text AS $$
     SELECT pg_get_indexdef(i.indexrelid) as def
     FROM pg_index i
@@ -88,7 +88,7 @@ CREATE OR REPLACE FUNCTION partitioner.get_table_index_defs(table_name text)
         -- AND i.indisprimary IS NOT TRUE AND i.indisunique IS NOT TRUE
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_table_attributes(table_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_table_attributes(table_name text)
     RETURNS SETOF text AS $$
     SELECT a.attname::text
     FROM pg_attribute a
@@ -97,7 +97,7 @@ CREATE OR REPLACE FUNCTION partitioner.get_table_attributes(table_name text)
     ORDER BY a.attnum
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION partitioner.column_is_indexed(column_name text, table_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.column_is_indexed(column_name text, table_name text)
     RETURNS boolean AS $$
 DECLARE
     tmp record;
@@ -114,7 +114,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_table_partitions(text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_table_partitions(text)
     RETURNS SETOF text AS $$
     SELECT n.nspname || '.' || t.relname::text
     FROM pg_class t, pg_namespace n, pg_inherits i
@@ -124,7 +124,7 @@ CREATE OR REPLACE FUNCTION partitioner.get_table_partitions(text)
     ORDER BY relname
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_table_pkey_fields(table_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_table_pkey_fields(table_name text)
     RETURNS text[] AS $$
     SELECT ARRAY(SELECT a.attname::text
                  FROM pg_constraint c, pg_attribute a
@@ -132,7 +132,7 @@ CREATE OR REPLACE FUNCTION partitioner.get_table_pkey_fields(table_name text)
                     AND c.contype='p' AND c.conrelid=$1::regclass)
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION partitioner.get_attributes_str_by_attnums(table_name text, attnums int[])
+CREATE OR REPLACE FUNCTION pgpartitioner.get_attributes_str_by_attnums(table_name text, attnums int[])
     RETURNS text AS $$
 DECLARE
     attname_sql text;
@@ -154,7 +154,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION partitioner.move_partition_data(table_name text, part_col text, count integer, max real)
+CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer, max real)
     RETURNS integer AS $$
 DECLARE
     bounds text[];
@@ -170,7 +170,7 @@ DECLARE
     total_moved integer DEFAULT 0;
     offset integer;
 BEGIN
-    SELECT * FROM partitioner.get_table_pkey_fields(table_name) INTO pkey_fields;
+    SELECT * FROM pgpartitioner.get_table_pkey_fields(table_name) INTO pkey_fields;
     
     -- make the returning clause
     FOR i IN 1 .. array_upper(pkey_fields, 1)
@@ -180,7 +180,7 @@ BEGIN
     
     <<main_loop>>
     FOR partition IN
-        SELECT * FROM partitioner.get_table_partitions(table_name)
+        SELECT * FROM pgpartitioner.get_table_partitions(table_name)
     LOOP
         -- raise notice 'moving data for partition: %', partition;
         SELECT array[substring(partition from '^'||table_name||'_([0-9]*)_[0-9]*$'),
@@ -243,7 +243,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION partitioner.move_partition_data(table_name text, part_col text, count integer)
+CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer)
     RETURNS integer AS $$
-    SELECT partitioner.move_partition_data($1, $2, $3, 'Infinity'::real)
+    SELECT pgpartitioner.move_partition_data($1, $2, $3, 'Infinity'::real)
 $$ LANGUAGE sql;

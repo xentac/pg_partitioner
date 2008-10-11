@@ -1,7 +1,17 @@
+Bigger items:
+
+* Post stage should create triggers on child tables -- optional?
+* Switch to custom catalogs -- ?
+* Fix end point parameter v. tables created consistency
+* Log actions + message verbosity controls -- no more print statements!
+* Partition management 
+** Ability to combine partitions
+** Ability to delete partitions
+
+Smaller items:
+
 * Refactor move_partion_data plpgsql func
-* Add comments to plpgsql functions
-* handle passed count of 0 to move_partition_data
-* fix table name consistency (qualified v. unqualified)
-* post stage should create triggers on child tables -- optional?
-* change default unit for integer partitioning to 10% of range
-* switch to custom catalogs
+* Add comments to plpgsql functions - done?
+* Handle passed count of 0 to move_partition_data
+* Fix table name consistency (qualified v. unqualified)
+* Change default unit for integer partitioning to 10% of range
