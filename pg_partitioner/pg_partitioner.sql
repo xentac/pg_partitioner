@@ -5,6 +5,7 @@ CREATE OR REPLACE FUNCTION pgpartitioner.quote_nullable(val anyelement)
     RETURNS text AS $$
     SELECT COALESCE(quote_literal($1), 'NULL');
 $$ LANGUAGE sql;
+COMMENT ON FUNCTION pgpartitioner.quote_nullable (arr anyelement) IS 'Quotes NULL values: ''NULL''';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.quote_array_literals(arr anyarray)
     RETURNS text[] AS $$
@@ -19,6 +20,7 @@ BEGIN
     RETURN ret;
 END;
 $$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION pgpartitioner.quote_array_literals (arr anyarray) IS 'Quotes all values in array with quote_nullable';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.table_exists(table_name text)
     RETURNS text AS $$
@@ -45,6 +47,7 @@ BEGIN
     RETURN table_name2;
 END;
 $$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION pgpartitioner.table_exists (table_name text) IS 'Checks if a table exists, returns fully qualified name or NULL.';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_column_type(table_name text, column_name text)
     RETURNS text AS $$
@@ -72,6 +75,7 @@ BEGIN
     RETURN column_type;
 END;
 $$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION pgpartitioner.get_column_type (table_name text, column_name text) IS 'Returns the type of the specified column on the specified table';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_constraint_defs(table_name text)
     RETURNS SETOF text AS $$
@@ -79,6 +83,7 @@ CREATE OR REPLACE FUNCTION pgpartitioner.get_table_constraint_defs(table_name te
     FROM pg_constraint c
     WHERE c.conrelid=$1::regclass
 $$ LANGUAGE sql;
+COMMENT ON FUNCTION pgpartitioner.get_table_constraint_defs (table_name text) IS 'Returns pg_get_constraintdef() string for each constraint on the specified table';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_index_defs(table_name text)
     RETURNS SETOF text AS $$
@@ -87,6 +92,7 @@ CREATE OR REPLACE FUNCTION pgpartitioner.get_table_index_defs(table_name text)
     WHERE i.indrelid=$1::regclass
         -- AND i.indisprimary IS NOT TRUE AND i.indisunique IS NOT TRUE
 $$ LANGUAGE sql;
+COMMENT ON FUNCTION pgpartitioner.get_table_index_defs (table_name text) IS 'Returns pg_get_indexdef() strings for each index on the specified table.';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_attributes(table_name text)
     RETURNS SETOF text AS $$
@@ -96,6 +102,7 @@ CREATE OR REPLACE FUNCTION pgpartitioner.get_table_attributes(table_name text)
         AND a.attnum > 0 AND NOT a.attisdropped
     ORDER BY a.attnum
 $$ LANGUAGE sql;
+COMMENT ON FUNCTION pgpartitioner.get_table_attributes (table_name text) IS 'Returns the all the attribute names on the specified table as text';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.column_is_indexed(column_name text, table_name text)
     RETURNS boolean AS $$
@@ -113,6 +120,7 @@ BEGIN
     RETURN FALSE;
 END;
 $$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION pgpartitioner.column_is_indexed (column_name text, table_name text) IS 'Checks if column is in the first position of any index on the specified table.';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_partitions(text)
     RETURNS SETOF text AS $$
@@ -123,6 +131,7 @@ CREATE OR REPLACE FUNCTION pgpartitioner.get_table_partitions(text)
         AND t.oid=i.inhrelid AND i.inhparent = $1::regclass
     ORDER BY relname
 $$ LANGUAGE sql;
+COMMENT ON FUNCTION pgpartitioner.get_table_partitions (text) IS 'Returns all partitions of the specified table as text.';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_pkey_fields(table_name text)
     RETURNS text[] AS $$
@@ -131,6 +140,7 @@ CREATE OR REPLACE FUNCTION pgpartitioner.get_table_pkey_fields(table_name text)
                  WHERE c.conrelid=a.attrelid AND a.attnum = any(c.conkey)
                     AND c.contype='p' AND c.conrelid=$1::regclass)
 $$ LANGUAGE sql;
+COMMENT ON FUNCTION pgpartitioner.get_table_partitions (table_name text) IS 'Returns a text array of all of a tables primary key attributes';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_attributes_str_by_attnums(table_name text, attnums int[])
     RETURNS text AS $$
@@ -153,6 +163,7 @@ BEGIN
     RETURN array_to_string(attnames, ',');
 END;
 $$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION pgpartitioner.get_attributes_str_by_attnums (table_name text, attnums int[]) IS 'Given an array of integers matching attnums on the specified table, returns a CSV string of the corresponding attribute names.';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer, max real)
     RETURNS integer AS $$
@@ -242,8 +253,10 @@ BEGIN
     RETURN total_moved;
 END;
 $$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer, max real) IS 'Handles the actual moving of data using partioner schema functions.  Specifies the table to partition, the column to base partitioning on, the number of records to partition during each iteration, and the maximum amount of records to move.';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer)
     RETURNS integer AS $$
     SELECT pgpartitioner.move_partition_data($1, $2, $3, 'Infinity'::real)
 $$ LANGUAGE sql;
+COMMENT ON FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer) IS 'Override of pgpartitioner.move_partition_data(), moves all data at once.';

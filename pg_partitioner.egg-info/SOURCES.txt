@@ -1,5 +1,6 @@
 LICENSE
 TODO
+ez_setup.py
 setup.cfg
 setup.py
 pg_partitioner/__init__.py
