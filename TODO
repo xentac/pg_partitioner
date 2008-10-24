@@ -11,7 +11,6 @@ Bigger items:
 Smaller items:
 
 * Refactor move_partion_data plpgsql func
-* Add comments to plpgsql functions - done?
 * Handle passed count of 0 to move_partition_data
 * Fix table name consistency (qualified v. unqualified)
 * Change default unit for integer partitioning to 10% of range

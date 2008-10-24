@@ -1,5 +1,4 @@
-#!/Library/Frameworks/Python.framework/Versions/2.4/bin/python
-##!/usr/bin/env python
+#!/usr/bin/env python
 
 import sys, os, re
 import psycopg2
@@ -55,7 +54,6 @@ class DatePartitioner(DBScript):
         return parser    
     
     def validate_opts(self):
-        print self.opts
         if self.opts.schema and len(self.args) == 0:
             return
             
