@@ -113,7 +113,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         cmd = script+" -u month --stage all foo val_ts"
         self.callproc(cmd)
         
-        typname = 'trigger' if self.pg_version.startswith('8.3') else '"trigger"'
+        typname = self.pg_version.startswith('8.3') and 'trigger' or '"trigger"'
         self.assertFunctionExists('foo_ins_trig', rettype=typname)
         
     def testParitionSchemaMatchesParentNoFKeys(self):

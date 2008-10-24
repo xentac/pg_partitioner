@@ -15,3 +15,5 @@ Smaller items:
 * Handle passed count of 0 to move_partition_data
 * Fix table name consistency (qualified v. unqualified)
 * Change default unit for integer partitioning to 10% of range
+* Add (optional) vacuum step after migrate
+* Analyze tables after data migration

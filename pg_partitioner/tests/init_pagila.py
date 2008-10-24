@@ -8,7 +8,7 @@ if not os.path.isfile('./pagila-0.9.0.zip'):
     print 'Missing pagila-0.9.0.zip'
     sys.exit(1)
 
-dbname = sys.argv[1] if len(sys.argv) > 1 else 'pagila'
+dbname = len(sys.argv) and sys.argv[1] or 'pagila'
 
 drop_db = 'dropdb %s' % dbname
 call(drop_db, shell=True)

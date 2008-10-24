@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#!/Library/Frameworks/Python.framework/Versions/2.4/bin/python
+##!/usr/bin/env python
 
 import sys, os, re
 import psycopg2
@@ -34,7 +35,7 @@ class DatePartitioner(DBScript):
         g.add_option('--schema', action='store_true', default=False,
                      help="Forces the partitioner schema to be loaded.  Can be run as the only non-connection option with no arguments.")
         g.add_option('-u', '--units', dest="units", metavar='UNIT',
-                     help="A valid PG unit for the column partitioned on.  Defaults to month for timestamp/date columns and 1 for integer column types")
+                     help="A valid PG unit for the column partitioned on.  Defaults to month for timestamp/date columns and 10% of the available data range for integer column types")
         g.add_option('--scale', type='int', metavar='COUNT',
                      default=1,
                      help="A 'scale factor' for the units.  The resulting range of values per partition created is scale * units.  The default is 1.")
@@ -74,7 +75,7 @@ class DatePartitioner(DBScript):
         self.set_range_vars()
 
     def run_stage(self, stage):
-        return True if stages[self.opts.stage] & stages[stage] else False
+        return  stages[self.opts.stage] & stages[stage] and True or False
     
     def table_is_partitioned(self):
         self.curs.execute('SELECT pgpartitioner.get_table_partitions(%s)', (self.qualified_table_name,))
@@ -402,7 +403,7 @@ class DatePartitioner(DBScript):
         
         print 'chunk size: %s' % self.opts.chunk
         self.curs.execute("SELECT pgpartitioner.get_table_partitions('%s')" % self.qualified_table_name)
-        self.partitions = [] if not self.curs.rowcount else [res[0] for res in self.curs.fetchall()]
+        self.partitions = self.curs.rowcount and [res[0] for res in self.curs.fetchall()] or []
         try:
             if self.run_stage('create'):
                 # build the partitions
