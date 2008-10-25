@@ -2,9 +2,15 @@
 
 import sys, os, re
 import psycopg2
+import cmd
 from optparse import OptionGroup
-from db_script import DBScript
+from script import DBScript
 from util_funcs import *
+
+try:
+    import readline
+except:
+    pass
 
 def_table_schema = \
 '''
@@ -21,7 +27,7 @@ stages = {'create': 1,
 
 class DatePartitioner(DBScript):
     def __init__(self, args):
-        super(DatePartitioner, self).__init__('DatePartitioner', args)
+        super(DatePartitioner, self).__init__(args)
         
     def init_optparse(self):
         usage = "%prog [options] TABLE PARTITION_FIELD"
@@ -147,7 +153,7 @@ class DatePartitioner(DBScript):
         elif self.short_type == 'int':
             return str(int(val) + int(self.opts.units))
         
-    def create_partitions(self):
+    def do_create(self):
         '''
         Create the child partitions, bails out if it encounters a partition
         that already exists
@@ -399,13 +405,12 @@ class DatePartitioner(DBScript):
             self.table_name = self.args[0]
         self.part_column = self.args[1]
         
-        print 'chunk size: %s' % self.opts.chunk
         self.curs.execute("SELECT pgpartitioner.get_table_partitions('%s')" % self.qualified_table_name)
         self.partitions = self.curs.rowcount and [res[0] for res in self.curs.fetchall()] or []
         try:
             if self.run_stage('create'):
                 # build the partitions
-                self.create_partitions()
+                self.do_create()
                 
             if self.run_stage('migrate'):
                 self.move_data_down()

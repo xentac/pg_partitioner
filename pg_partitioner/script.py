@@ -9,7 +9,6 @@ import getpass
 import psycopg2
 from psycopg2.extras import DictConnection
 from optparse import OptionParser
-from cmd import Cmd
 
 def default_db_user():
     return os.environ.get('PGUSER', os.environ['USER'])
@@ -28,7 +27,7 @@ def default_db_str():
                                                     default_db_host(), default_db_port())
 
 class Script(object):
-    def __init__(self, name, args):
+    def __init__(self, args):
         self.parser = self.init_optparse()
         self.opts, self.args = self.parser.parse_args(args)
         
@@ -40,17 +39,15 @@ class Script(object):
         pass
         
 class DBScript(Script):
-    def __init__(self, name, args):
-        # self.parser = self.init_optparse()
-        #         self.opts, self.args = self.parser.parse_args(args)
-        super(DBScript, self).__init__('DatePartitioner', args)
+    def __init__(self, args):
+        super(DBScript, self).__init__(args)
         
         self.con = self.get_connection()
         self.curs = self.con.cursor()
         
         self.validate_opts()
         
-    def init_optparse(self, usage):
+    def init_optparse(self, usage=None):
         parser = super(DBScript, self).init_optparse(usage)
 
         default_conn_str = default_db_str()
