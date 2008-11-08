@@ -165,11 +165,10 @@ END;
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION pgpartitioner.get_attributes_str_by_attnums (table_name text, attnums int[]) IS 'Given an array of integers matching attnums on the specified table, returns a CSV string of the corresponding attribute names.';
 
-CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer, max real)
+CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(src_tbl text, dst_tbl text, part_col text, count integer, max real)
     RETURNS integer AS $$
 DECLARE
     bounds text[];
-    partition text;
     pkey_fields text[];
     pkey_fields_conv text[];
     pkeys_str text;
@@ -181,7 +180,7 @@ DECLARE
     total_moved integer DEFAULT 0;
     offset integer;
 BEGIN
-    SELECT * FROM pgpartitioner.get_table_pkey_fields(table_name) INTO pkey_fields;
+    SELECT * FROM pgpartitioner.get_table_pkey_fields(src_tbl) INTO pkey_fields;
     
     -- make the returning clause
     FOR i IN 1 .. array_upper(pkey_fields, 1)
@@ -189,74 +188,101 @@ BEGIN
         pkey_fields_conv[i] := pkey_fields[i] || '::text';
     END LOOP;
     
-    <<main_loop>>
-    FOR partition IN
-        SELECT * FROM pgpartitioner.get_table_partitions(table_name)
+    -- raise notice 'moving data for partition: %', partition;
+    SELECT array[substring(dst_tbl from '_([0-9]*)_[0-9]*$'),
+           substring(dst_tbl from '_[0-9]*_([0-9]*)$')]
+    INTO bounds;
+    offset := 0;
     LOOP
-        -- raise notice 'moving data for partition: %', partition;
-        SELECT array[substring(partition from '^'||table_name||'_([0-9]*)_[0-9]*$'),
-               substring(partition from '^'||table_name||'_[0-9]*_([0-9]*)$')]
-        INTO bounds;
-        offset := 0;
-        <<partition_loop>>
-        LOOP
-            -- ensure we don't pass the max rows to be moved if it's set
-            IF total_moved + to_move > max THEN
-                to_move := max - total_moved;
-            END IF;
-            
-            pkeys_str := '';
-            move_data_sql := 'INSERT INTO ' || partition || '
-                              SELECT *
-                              FROM ONLY ' || table_name || '
-                              WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' || 
-                                quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || '
-                              ORDER BY ' || quote_ident(part_col) || '
-                              LIMIT ' || quote_literal(to_move) || ' ';
-            -- RAISE NOTICE 'move data sql: %', move_data_sql;
-            IF max != 'Infinity' THEN
-                move_data_sql := move_data_sql || ' RETURNING ''('' || array_to_string(quote_array_literals(array[' || array_to_string(pkey_fields_conv, ',') || ']), '','') || '')'';';
-                FOR moved_data_pkey IN EXECUTE move_data_sql
-                LOOP
-                    -- RAISE NOTICE 'move data pkey: %', moved_data_pkey;
-                    pkeys_str := pkeys_str || moved_data_pkey || ',';
-                END LOOP;
-            
-                EXIT WHEN NOT FOUND;
-                GET DIAGNOSTICS moved := ROW_COUNT;
-                -- raise notice 'inserted count: %', moved;
-                        
-                pkeys_str := substring(pkeys_str from 1 for char_length(pkeys_str)-1);
-                delete_sql := 'DELETE FROM ONLY ' || table_name || '
-                               WHERE (' || array_to_string(pkey_fields, ',') || ') IN (' || pkeys_str ||');';
-                -- RAISE NOTICE 'delete data sql: %', delete_sql;
-                EXECUTE delete_sql;
-            ELSE
-                move_data_sql := move_data_sql || ' OFFSET ' || quote_literal(offset);
-                EXECUTE move_data_sql;
-                offset := offset + to_move;
-            END IF;
-            
-            GET DIAGNOSTICS moved := ROW_COUNT;
-            -- raise notice 'deleted count: %', moved;
-            
-            total_moved := total_moved + moved;
-            EXIT main_loop WHEN total_moved = max;
-            EXIT partition_loop WHEN moved < count;
-        END LOOP;
-        IF max = 'Infinity' THEN
-            EXECUTE 'DELETE FROM ONLY ' || table_name || '
-                     WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' ||
-                        quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || ';';
+        -- ensure we don't pass the max rows to be moved if it's set
+        IF total_moved + to_move > max THEN
+            to_move := max - total_moved;
         END IF;
+        
+        pkeys_str := '';
+        move_data_sql := 'INSERT INTO ' || dst_tbl || '
+                          SELECT *
+                          FROM ONLY ' || src_tbl || '
+                          WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' || 
+                            quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || '
+                          ORDER BY ' || quote_ident(part_col) || '
+                          LIMIT ' || quote_literal(to_move) || ' ';
+        -- RAISE NOTICE 'move data sql: %', move_data_sql;
+        IF max != 'Infinity' THEN
+            move_data_sql := move_data_sql || ' RETURNING ''('' || array_to_string(pgpartitioner.quote_array_literals(array[' || array_to_string(pkey_fields_conv, ',') || ']), '','') || '')'';';
+            FOR moved_data_pkey IN EXECUTE move_data_sql
+            LOOP
+                -- RAISE NOTICE 'move data pkey: %', moved_data_pkey;
+                pkeys_str := pkeys_str || moved_data_pkey || ',';
+            END LOOP;
+        
+            EXIT WHEN NOT FOUND;
+            GET DIAGNOSTICS moved := ROW_COUNT;
+            -- raise notice 'inserted count: %', moved;
+                    
+            pkeys_str := substring(pkeys_str from 1 for char_length(pkeys_str)-1);
+            delete_sql := 'DELETE FROM ONLY ' || src_tbl || '
+                           WHERE (' || array_to_string(pkey_fields, ',') || ') IN (' || pkeys_str ||');';
+            -- RAISE NOTICE 'delete data sql: %', delete_sql;
+            EXECUTE delete_sql;
+        ELSE
+            move_data_sql := move_data_sql || ' OFFSET ' || quote_literal(offset);
+            EXECUTE move_data_sql;
+            offset := offset + to_move;
+        END IF;
+        
+        GET DIAGNOSTICS moved := ROW_COUNT;
+        -- raise notice 'deleted count: %', moved;
+        
+        total_moved := total_moved + moved;
+        EXIT WHEN total_moved = max OR moved < count OR count = 0;
+        -- EXIT main_loop WHEN total_moved = max OR moved < count;
+        -- EXIT partition_loop WHEN moved < count;
     END LOOP;
+    IF max = 'Infinity' THEN
+        EXECUTE 'DELETE FROM ONLY ' || src_tbl || '
+                 WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' ||
+                    quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || ';';
+    END IF;
     RETURN total_moved;
 END;
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer, max real) IS 'Handles the actual moving of data using partioner schema functions.  Specifies the table to partition, the column to base partitioning on, the number of records to partition during each iteration, and the maximum amount of records to move.';
+COMMENT ON FUNCTION pgpartitioner.move_partition_data(src_tbl text, dst_tbl text, part_col text, count integer, max real) IS 'Handles the actual moving of data using partioner schema functions.  Specifies the table to partition, the column to base partitioning on, the number of records to partition during each iteration, and the maximum amount of records to move.';
 
-CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer)
+CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(src_tbl text, dst_tbl text, part_col text, count integer)
     RETURNS integer AS $$
-    SELECT pgpartitioner.move_partition_data($1, $2, $3, 'Infinity'::real)
+    SELECT pgpartitioner.move_partition_data($1, $2, $3, $4, 'Infinity'::real)
 $$ LANGUAGE sql;
-COMMENT ON FUNCTION pgpartitioner.move_partition_data(table_name text, part_col text, count integer) IS 'Override of pgpartitioner.move_partition_data(), moves all data at once.';
+COMMENT ON FUNCTION pgpartitioner.move_partition_data(src_tbl text, dst_tbl text, part_col text, count integer) IS 'Override of pgpartitioner.move_partition_data(), moves all data at once.';
+
+CREATE OR REPLACE FUNCTION pgpartitioner.partition_parent_data(table_name text, part_col text, count integer, max real)
+    RETURNS integer AS $$
+DECLARE
+    q_table_name text;
+    partition text;
+    moved integer;
+    total_moved integer;
+    cur_max real DEFAULT max;
+BEGIN
+    SELECT pgpartitioner.table_exists(table_name) INTO q_table_name;
+    IF q_table_name IS NULL THEN
+        RAISE NOTICE '% does not exist in the current search path.';
+    END IF;
+    
+    total_moved := 0;
+    FOR partition IN
+        SELECT * FROM pgpartitioner.get_table_partitions(q_table_name)
+    LOOP
+        SELECT pgpartitioner.move_partition_data(q_table_name, partition, part_col, count, cur_max) INTO moved;
+        total_moved := total_moved + moved;
+        cur_max := cur_max - moved;
+        EXIT WHEN cur_max = 0;
+    END LOOP;
+    RETURN total_moved;
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION pgpartitioner.partition_parent_data(table_name text, part_col text, count integer)
+    RETURNS integer AS $$
+    SELECT pgpartitioner.partition_parent_data($1, $2, $3, 'Infinity'::real);
+$$ LANGUAGE sql;

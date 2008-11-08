@@ -153,7 +153,7 @@ class DatePartitioner(DBScript):
         elif self.short_type == 'int':
             return str(int(val) + int(self.opts.units))
         
-    def do_create(self):
+    def build_tables(self):
         '''
         Create the child partitions, bails out if it encounters a partition
         that already exists
@@ -325,14 +325,14 @@ class DatePartitioner(DBScript):
                 self.curs.execute(fkey_trig_sql % d)
                 
     
-    def move_data_down(self):
+    def migrate_data(self):
         '''
         In the loop SELECT %s_ins_func(); will push any data down it can and return anything it can't.
         We then DELETE everything touched and, after the loop, re-insert data that couldn't be moved.
         '''
         move_down_sql = \
         '''
-        SELECT pgpartitioner.move_partition_data('%(table_name)s', '%(part_column)s', %(limit)s);
+        SELECT pgpartitioner.partition_parent_data('%(table_name)s', '%(part_column)s', %(limit)s);
         '''
         
         d = {'table_name': self.qualified_table_name,
@@ -410,10 +410,10 @@ class DatePartitioner(DBScript):
         try:
             if self.run_stage('create'):
                 # build the partitions
-                self.do_create()
+                self.build_tables()
                 
             if self.run_stage('migrate'):
-                self.move_data_down()
+                self.migrate_data()
             
             if self.run_stage('post'):
                 self.set_trigger_func()
