@@ -2,7 +2,6 @@ Bigger items:
 
 * Post stage should create triggers on child tables -- optional?
 * Switch to custom catalogs -- ?
-* Fix end point parameter v. tables created consistency
 * Log actions + message verbosity controls -- no more print statements!
 * Partition management 
 ** Ability to combine partitions
@@ -13,4 +12,5 @@ Smaller items:
 * Fix table name consistency (qualified v. unqualified)
 * Change default unit for integer partitioning to 10% of range
 * Add (optional) vacuum step after migrate
+* Remove end point from table names
 * Analyze tables after data migration
