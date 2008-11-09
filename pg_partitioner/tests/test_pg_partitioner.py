@@ -34,7 +34,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         default_schema_sql = 'SELECT current_schema();'
         pg_version_sql = 'SELECT version();'
         
-        self.part_fmt = 'foo_%s_%s'
+        self.part_fmt = 'foo_%s'
         self.transactional = False
         
         self.connect('dbname=dateparttest')
@@ -67,18 +67,18 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         sts, p = self.callproc(cmd)
         output = p.stdout.read()
         
-        dates = start_date, self.nextInterval(date_units, start_date)
-        while dates[0] <= end_date:
-            part = self.default_schema+'.'+(self.part_fmt % dates)
+        date = start_date
+        while date <= end_date:
+            part = self.default_schema+'.'+(self.part_fmt % date)
             self.assertTableExists(part)
             self.assertNotEqual(output.find('Creating '+part), -1)
-            dates = dates[1], self.nextInterval(date_units, dates[1])
+            date = self.nextInterval(date_units, date)
         
-        part = self.part_fmt % (self.nextInterval('-'+date_units, start_date), start_date)
+        part = self.part_fmt % self.nextInterval('-'+date_units, start_date)
         self.assertTableNotExists(part)
         self.assertEqual(output.find(part), -1)
         
-        part = self.part_fmt % (dates[1], self.nextInterval(date_units, dates[1]))
+        part = self.part_fmt % (self.nextInterval(date_units, date))
         self.assertTableNotExists(part)
         self.assertEqual(output.find(part), -1)
         
@@ -120,7 +120,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         cmd = script+" -u month -s 20080101 -e 20080201 --stage all foo val_ts"
         self.runTableValidations(cmd, '20080101', '20080201', '1 month')
         
-        for tbl in ['foo_20080101_20080201', 'foo_20080201_20080301']:
+        for tbl in ['foo_20080101', 'foo_20080201']:
             self.assertTableExists(tbl)
             self.assertTableHasColumn(tbl, 'id', 'integer')
             self.assertTableHasColumn(tbl, 'val_ts', 'timestamp without time zone')
@@ -134,7 +134,7 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         cmd = script+" -u month -s 20080101 -e 20080201 -f --stage all foo val_ts"
         self.runTableValidations(cmd, '20080101', '20080201', '1 month')
         
-        for tbl in ['foo_20080101_20080201', 'foo_20080201_20080301']:
+        for tbl in ['foo_20080101', 'foo_20080201']:
             self.assertTableExists(tbl)
             self.assertTableHasColumn(tbl, 'id', 'integer')
             self.assertTableHasColumn(tbl, 'val_ts', 'timestamp without time zone')
@@ -164,10 +164,10 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.assertNotEqual(output.find('Moved 7 rows into partitions.'), -1)
     
     def testLimitedRangeKeepsDataInParent(self):
-        cmd = script+" -u month -s 20080101 -e 20080501 foo val_ts"
+        cmd = script+" -u month -s 20080201 -e 20080501 foo val_ts"
         self.callproc(cmd)
         
-        cmd = script+" -u month -s 20080101 -e 20080501 --stage migrate foo val_ts"
+        cmd = script+" -u month -s 20080201 -e 20080501 --stage migrate foo val_ts"
         sts, p = self.callproc(cmd)
         
         sql = "SELECT COUNT(*) FROM foo;"
@@ -182,39 +182,17 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         self.assertNotEqual(output.find('Moved 4 rows into partitions.'), -1)
         # self.assertNotEqual(output.find('Kept 3 rows in the parent table.'), -1)
     
-    # def testExistingTableCreatePassesWithIgnoreFlag(self):
-    #     cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
-    #     self.callproc(cmd)
-    #     
-    #     cmd = script+" -u month -s 20080115 -e 20080513 foo val_ts -i"
-    #     
-    #     output = self.runTableValidations(cmd, '20080101', '20080513', '1 month')
-    #     self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
-    #     self.assertEqual(output.count('relation "foo_20080201_20080301" already exists'), 1)
-    #     self.assertEqual(output.count('Ignoring error.'), 2)
-    
-    # def testExistingTableCreateFailsWithNoIgnoreFlag(self):
-    #     cmd = script+" -u month -s 20080101 -e 20080201 foo val_ts"
-    #     self.callproc(cmd)
-    #     
-    #     cmd = script+" -u month -s 20080115 -e 20080513 foo val_ts"
-    #     sts, p = self.callproc(cmd)
-    #     
-    #     output = p.stdout.read()
-    #     self.assertEqual(output.count('relation "foo_20080101_20080201" already exists'), 1)
-    #     self.failUnlessRaises(self.failureException, self.runTableValidations, cmd, '20080101', '20080501', '1 month')
-    
     def testRunWithTestFlagDoesntCommit(self):
         cmd = script+" -u month -t foo val_ts"
         sts, p = self.callproc(cmd)
         
         output = p.stdout.read()
-        dates = '20070701', self.nextInterval('1 month', '20070701')
-        while dates[0] <= '20090101':
-            part = self.default_schema+'.'+(self.part_fmt % dates)
+        date = '20070701'
+        while date <= '20090101':
+            part = self.default_schema+'.'+(self.part_fmt % date)
             self.assertTableNotExists(part)
             self.assertNotEqual(output.find('Creating '+part), -1) # still prints creation notices
-            dates = dates[1], self.nextInterval('1 month', dates[1])
+            date = self.nextInterval('1 month', date)
         
         self.assertNotEqual(output.find('Test Run:'), -1)
         self.assertNotEqual(output.find('Rolling back test run.'), -1)

@@ -82,7 +82,7 @@ class DatePartitioner(DBScript):
         return  stages[self.opts.stage] & stages[stage] and True or False
     
     def table_is_partitioned(self):
-        self.curs.execute('SELECT pgpartitioner.get_table_partitions(%s)', (self.qualified_table_name,))
+        self.curs.execute('SELECT pgpartitioner.get_partitions(%s)', (self.qualified_table_name,))
         if self.curs.rowcount:
             return True
         return False
@@ -105,7 +105,7 @@ class DatePartitioner(DBScript):
     def set_range_vars(self):
         def_dates_sql = \
         '''
-        SELECT to_char(date_trunc('%s', MIN(%s)), 'YYYYMMDD'), to_char(date_trunc('%s', MAX(%s)), 'YYYYMMDD')
+        SELECT to_char(date_trunc('%s', MIN(%s)), 'YYYYMMDD'), to_char(MAX(%s), 'YYYYMMDD')
         FROM %s;
         '''
 
@@ -118,7 +118,7 @@ class DatePartitioner(DBScript):
         if self.col_type == 'date' or re.search('time[^\]]*$', self.col_type):
             self.short_type = 'ts'
             units = self.opts.units or 'month'
-            self.curs.execute(def_dates_sql % (units, self.args[1], units, self.args[1], self.args[0]))
+            self.curs.execute(def_dates_sql % (units, self.args[1], self.args[1], self.args[0]))
         elif re.search('int[^\]]*$', self.col_type):
             self.short_type = 'int'
             try:
@@ -161,19 +161,25 @@ class DatePartitioner(DBScript):
         create_part_sql = \
         '''
         CREATE TABLE %s (
-            CHECK (%s >= '%s' AND %s < '%s')
+            %s
         ) INHERITS (%s);
         '''
         
-        end_points = (self.opts.start, self.nextInterval(self.opts.start))
+        start, end = (self.opts.start, self.nextInterval(self.opts.start))
+        # print start
         while True:
-            if int(end_points[0]) > int(self.opts.end):
+            if int(start) > int(self.opts.end):
                 break
+            
+            if end < int(self.opts.end):
+                check_str = "CHECK (%s >= '%s' AND %s < '%s')" % (self.part_column, start, self.part_column, end)
+            else:
+                check_str = "CHECK (%s >= '%s')" % (self.part_column, start)
                 
-            partition = '%s_%s_%s' % (self.qualified_table_name, end_points[0], end_points[1])
+            partition = '%s_%s' % (self.qualified_table_name, start)
             if partition in self.partitions:
                 print '%s already exists....' % partition
-                end_points = (end_points[1], self.nextInterval(end_points[1]))
+                start, end = (end, self.nextInterval(end))
                 continue
                 
             try:
@@ -181,16 +187,13 @@ class DatePartitioner(DBScript):
                     
                 print 'Creating %s...' % partition
                 self.curs.execute(create_part_sql % 
-                        (partition, self.part_column, 
-                         end_points[0], self.part_column, end_points[1], self.qualified_table_name))
+                        (partition, check_str, self.qualified_table_name))
             except psycopg2.ProgrammingError, e:
                 if e.message.strip().endswith('already exists'):
                     self.curs.execute('ROLLBACK TO SAVEPOINT create_table_save;')
             
-            end_points = (end_points[1], self.nextInterval(end_points[1]))
+            start, end = (end, self.nextInterval(end))
             self.partitions.append(partition)
-        # self.partitions = list(set(self.partitions))
-        # self.partitions.sort()
 
     def get_indexdefs_str(self):
         idxs_sql = ''
@@ -199,12 +202,12 @@ class DatePartitioner(DBScript):
         for idx in get_index_defs(self.curs, self.qualified_table_name):
             idx_count += 1
             if idx.count(self.table_name) == 1: 
-                idx = re.sub(idx_re, r'\1%s_%%s_%%s_\2' % self.table_name, idx)
+                idx = re.sub(idx_re, r'\1%s_%%s_\2' % self.table_name, idx)
             else:
                 i = idx.find(self.table_name) + len(self.table_name)
-                idx = idx[:i]+'_%s_%s'+idx[i:]
+                idx = idx[:i]+'_%s'+idx[i:]
             i = idx.rfind(self.table_name) + len(self.table_name)
-            idx = idx[:i]+'_%s_%s'+idx[i:]
+            idx = idx[:i]+'_%s'+idx[i:]
             idxs_sql += idx+';'
         return idxs_sql, idx_count
     
@@ -216,13 +219,13 @@ class DatePartitioner(DBScript):
         idxs_str, idx_count = self.get_indexdefs_str()
         
         if idxs_str:
-            end_points_re = re.compile(r'%s_(\d*)_(\d*)' % self.table_name)
+            partition_point_re = re.compile(r'%s_(\d*)' % self.table_name)
             for part in self.partitions:
                 self.curs.execute('SAVEPOINT idx_create_save;')
-                m = end_points_re.search(part)
-                end_points = m.groups(1)
+                m = partition_point_re.search(part)
+                partition_point = m.groups(1)[0]
                 try:
-                    self.curs.execute(idxs_str % ((end_points[0], end_points[1])*idx_count*2))
+                    self.curs.execute(idxs_str % ((partition_point,)*idx_count*2))
                 except psycopg2.ProgrammingError, e:
                     if e.message.strip().endswith('already exists'):
                         self.curs.execute('ROLLBACK TO SAVEPOINT idx_create_save')
@@ -230,11 +233,11 @@ class DatePartitioner(DBScript):
     def get_constraintdefs(self):
         constraints = []
         for constraint_def in get_constraint_defs(self.curs, self.qualified_table_name):
-            constraints.append('ALTER TABLE %s_%%s_%%s ADD %s;' % (self.qualified_table_name, constraint_def))
+            constraints.append('ALTER TABLE %s_%%s ADD %s;' % (self.qualified_table_name, constraint_def))
 
         if self.opts.fkeys:
             for fkey_def in get_fkey_defs(self.curs, self.qualified_table_name):
-                constraints.append('ALTER TABLE %s_%%s_%%s ADD %s' % (self.qualified_table_name, fkey_def))
+                constraints.append('ALTER TABLE %s_%%s ADD %s' % (self.qualified_table_name, fkey_def))
         return constraints
     
     def build_constraints(self):
@@ -245,14 +248,14 @@ class DatePartitioner(DBScript):
         constraints_defs = self.get_constraintdefs()
         
         if constraints_defs:
-            end_points_re = re.compile(r'%s_(\d*)_(\d*)' % self.table_name)
+            partition_point_re = re.compile(r'%s_(\d*)' % self.table_name)
             for part in self.partitions:
                 self.curs.execute('SAVEPOINT constraint_create_save;')
-                m = end_points_re.search(part)
-                end_points = m.groups(1)
+                m = partition_point_re.search(part)
+                partition_point = m.groups(1)[0]
                 for con in constraints_defs:
                     try:
-                        self.curs.execute(con % (end_points[0], end_points[1]))
+                        self.curs.execute(con % (partition_point,))
                     except psycopg2.ProgrammingError, e:
                         m = e.message.strip()
                         if m.strip().endswith('already existms') or m.startswith('multiple primary keys'):
@@ -405,7 +408,7 @@ class DatePartitioner(DBScript):
             self.table_name = self.args[0]
         self.part_column = self.args[1]
         
-        self.curs.execute("SELECT pgpartitioner.get_table_partitions('%s')" % self.qualified_table_name)
+        self.curs.execute("SELECT pgpartitioner.get_partitions('%s')" % self.qualified_table_name)
         self.partitions = self.curs.rowcount and [res[0] for res in self.curs.fetchall()] or []
         try:
             if self.run_stage('create'):

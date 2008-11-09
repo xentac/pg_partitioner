@@ -122,16 +122,30 @@ END;
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION pgpartitioner.column_is_indexed (column_name text, table_name text) IS 'Checks if column is in the first position of any index on the specified table.';
 
-CREATE OR REPLACE FUNCTION pgpartitioner.get_table_partitions(text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_partitions(text)
     RETURNS SETOF text AS $$
     SELECT n.nspname || '.' || t.relname::text
     FROM pg_class t, pg_namespace n, pg_inherits i
     WHERE n.oid=t.relnamespace 
-        AND nspname || '.' || relname ~ ('^' || $1 || '_[0-9]+_[0-9]+$')
+        AND nspname || '.' || relname ~ ('^' || $1 || '_[0-9]+$')
         AND t.oid=i.inhrelid AND i.inhparent = $1::regclass
     ORDER BY relname
 $$ LANGUAGE sql;
-COMMENT ON FUNCTION pgpartitioner.get_table_partitions (text) IS 'Returns all partitions of the specified table as text.';
+COMMENT ON FUNCTION pgpartitioner.get_partitions (text) IS 'Returns all partitions of the specified table as text.';
+
+CREATE OR REPLACE FUNCTION pgpartitioner.get_partition_parent(text)
+    RETURNS text AS $$
+    SELECT n.nspname || '.' || t.relname::text
+    FROM pg_class t, pg_namespace n, pg_inherits i
+    WHERE n.oid=t.relnamespace
+        AND t.oid=i.inhparent AND i.inhrelid = $1::regclass
+$$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION pgpartitioner.get_partition_points(table_name text)
+    RETURNS SETOF text AS $$
+    SELECT split_part(s.part, '_', array_upper(string_to_array(s.part, '_'), 1))
+    FROM pgpartitioner.get_partitions($1) s(part)
+$$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_pkey_fields(table_name text)
     RETURNS text[] AS $$
@@ -140,7 +154,7 @@ CREATE OR REPLACE FUNCTION pgpartitioner.get_table_pkey_fields(table_name text)
                  WHERE c.conrelid=a.attrelid AND a.attnum = any(c.conkey)
                     AND c.contype='p' AND c.conrelid=$1::regclass)
 $$ LANGUAGE sql;
-COMMENT ON FUNCTION pgpartitioner.get_table_partitions (table_name text) IS 'Returns a text array of all of a tables primary key attributes';
+COMMENT ON FUNCTION pgpartitioner.get_table_pkey_fields (table_name text) IS 'Returns a text array of all of a tables primary key attributes';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_attributes_str_by_attnums(table_name text, attnums int[])
     RETURNS text AS $$
@@ -168,6 +182,7 @@ COMMENT ON FUNCTION pgpartitioner.get_attributes_str_by_attnums (table_name text
 CREATE OR REPLACE FUNCTION pgpartitioner.move_partition_data(src_tbl text, dst_tbl text, part_col text, count integer, max real)
     RETURNS integer AS $$
 DECLARE
+    partition_points text[];
     bounds text[];
     pkey_fields text[];
     pkey_fields_conv text[];
@@ -181,17 +196,25 @@ DECLARE
     offset integer;
 BEGIN
     SELECT * FROM pgpartitioner.get_table_pkey_fields(src_tbl) INTO pkey_fields;
+    SELECT ARRAY(SELECT * FROM pgpartitioner.get_partition_points(pgpartitioner.get_partition_parent(dst_tbl)))
+        INTO partition_points;
     
     -- make the returning clause
-    FOR i IN 1 .. array_upper(pkey_fields, 1)
+    FOR i IN 1..array_upper(pkey_fields, 1)
     LOOP
         pkey_fields_conv[i] := pkey_fields[i] || '::text';
     END LOOP;
     
-    -- raise notice 'moving data for partition: %', partition;
-    SELECT array[substring(dst_tbl from '_([0-9]*)_[0-9]*$'),
-           substring(dst_tbl from '_[0-9]*_([0-9]*)$')]
-    INTO bounds;
+    bounds[1] := substring(dst_tbl from '_([0-9]*)$');
+    raise notice 'bounds: %', bounds[1];
+    FOR i IN 1..array_upper(partition_points, 1)-1
+    LOOP
+        IF bounds[1] = partition_points[i] THEN
+            bounds[2] := partition_points[i+1];
+            EXIT;
+        END IF;
+    END LOOP;
+    
     offset := 0;
     LOOP
         -- ensure we don't pass the max rows to be moved if it's set
@@ -203,11 +226,16 @@ BEGIN
         move_data_sql := 'INSERT INTO ' || dst_tbl || '
                           SELECT *
                           FROM ONLY ' || src_tbl || '
-                          WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' || 
-                            quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || '
+                          WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]);
+        
+        IF bounds[2] IS NOT NULL THEN
+            move_data_sql := move_data_sql || ' AND ' || quote_ident(part_col) || ' < ' || quote_literal(bounds[2]);
+        END IF;
+        
+        move_data_sql := move_data_sql || '
                           ORDER BY ' || quote_ident(part_col) || '
                           LIMIT ' || quote_literal(to_move) || ' ';
-        -- RAISE NOTICE 'move data sql: %', move_data_sql;
+        RAISE NOTICE 'move data sql: %', move_data_sql;
         IF max != 'Infinity' THEN
             move_data_sql := move_data_sql || ' RETURNING ''('' || array_to_string(pgpartitioner.quote_array_literals(array[' || array_to_string(pkey_fields_conv, ',') || ']), '','') || '')'';';
             FOR moved_data_pkey IN EXECUTE move_data_sql
@@ -240,9 +268,12 @@ BEGIN
         -- EXIT partition_loop WHEN moved < count;
     END LOOP;
     IF max = 'Infinity' THEN
-        EXECUTE 'DELETE FROM ONLY ' || src_tbl || '
-                 WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]) || ' AND ' ||
-                    quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || ';';
+        delete_sql := 'DELETE FROM ONLY ' || src_tbl || '
+                 WHERE ' || quote_ident(part_col) || ' >= ' || quote_literal(bounds[1]);
+        IF bounds[2] IS NOT NULL THEN
+            delete_sql := delete_sql || ' AND ' || quote_ident(part_col) || ' < ' || quote_literal(bounds[2]) || ';';
+        END IF;
+        EXECUTE delete_sql;
     END IF;
     RETURN total_moved;
 END;
@@ -271,7 +302,7 @@ BEGIN
     
     total_moved := 0;
     FOR partition IN
-        SELECT * FROM pgpartitioner.get_table_partitions(q_table_name)
+        SELECT * FROM pgpartitioner.get_partitions(q_table_name)
     LOOP
         SELECT pgpartitioner.move_partition_data(q_table_name, partition, part_col, count, cur_max) INTO moved;
         total_moved := total_moved + moved;

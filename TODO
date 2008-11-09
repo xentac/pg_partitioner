@@ -12,5 +12,4 @@ Smaller items:
 * Fix table name consistency (qualified v. unqualified)
 * Change default unit for integer partitioning to 10% of range
 * Add (optional) vacuum step after migrate
-* Remove end point from table names
 * Analyze tables after data migration

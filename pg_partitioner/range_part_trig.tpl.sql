@@ -4,24 +4,33 @@ CREATE OR REPLACE FUNCTION %(table_name)s_ins_func(rec %(table_name)s)
 DECLARE
     partition varchar;
     name_parts varchar[];
+    partition_points text[];
     upper_dim integer;
+    i integer;
     ins_sql varchar;
 BEGIN
-    FOR partition IN
-        SELECT * FROM pgpartitioner.get_table_partitions('%(table_name)s')
-    LOOP
-        name_parts := string_to_array(partition, '_');
-        upper_dim := array_upper(name_parts, 1);
-        IF rec.%(part_column)s >= name_parts[upper_dim-1]::%(col_type)s 
-                AND rec.%(part_column)s < name_parts[upper_dim]::%(col_type)s THEN
-            ins_sql := 'INSERT INTO %(table_name)s_' || name_parts[upper_dim-1] || '_' || 
-                        name_parts[upper_dim] || ' (%(table_atts)s) VALUES (' || %(atts_vals)s || ');';
-            EXECUTE ins_sql;
-            RETURN NULL;
-        END IF;
-    END LOOP;
-    RAISE WARNING 'No partition created for %(table_name)s to hold value %(col_type)s %%, leaving data in parent table.', rec.%(part_column)s;
-    RETURN rec;
+    SELECT pgpartitioner.get_partition_points('%(table_name)s') INTO partition_points;
+    upper_dim := array_upper(parition_points, 1);
+    
+    partition := %(table_name)s || '_';
+    IF rec.%(part_column)s < partition_points[1] THEN
+        RAISE WARNING 'No partition created for %(table_name)s to hold value %(col_type)s %%, leaving data in parent table.', rec.%(part_column)s;
+        RETURN rec;
+    ELSIF rec.%(part_column)s > partition_points[upper_dim] THEN
+        partition := partition || partition_points[uppder_dim];
+    ELSE
+        FOR i IN 2 .. upper_dim-1
+        LOOP
+            IF rec.%(part_column)s >= partition_points[i] AND rec.%(part_column)s < partition_points[i+1] THEN
+                partition := partition || partition_points[i];
+                EXIT;
+            END IF;
+        END LOOP;
+    END IF;
+        
+    ins_sql := 'INSERT INTO ' || partition || ' (%(table_atts)s) VALUES (' || %(atts_vals)s || ');';
+    EXECUTE ins_sql;
+    RETURN NULL;    
 END;
 $$ language plpgsql;
 
