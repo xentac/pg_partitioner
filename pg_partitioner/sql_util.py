@@ -16,11 +16,11 @@ def get_column_type(curs, table_name, column_name):
     curs.execute('SELECT pgpartitioner.get_column_type(%s, %s);', (table_name, column_name))
     return curs.fetchone()[0]
     
-def get_constraint_defs(curs, table_name, fkeys):
+def get_constraint_defs(curs, table_name, fkeys=True):
     '''
     Returns a list of constraint definition fragments suitable for use 
-    in SQL create table or alter table statements.  If fkeys is true then only
-    fkey defs are returned, if fkeys is false then all but fkey defs are returned.
+    in SQL create table or alter table statements.  fkeys are not included if
+    fkeys is false
     '''
     curs.execute('SELECT * FROM pgpartitioner.get_table_constraint_defs(%s, %s);', (table_name, fkeys))
     return [res[0] for res in curs.fetchall()]
@@ -38,15 +38,7 @@ def table_attributes(curs, table_name):
     '''
     Returns a tuple of the given table's attributes
     '''
-    att_sql = \
-    '''
-    SELECT a.attname
-    FROM pg_attribute a
-    WHERE a.attrelid=%s::regclass
-        AND a.attnum > 0 AND NOT a.attisdropped
-    ORDER BY a.attnum;
-    '''
-    curs.execute(att_sql, (table_name,))
+    curs.execute('SELECT * FROM pgpartitioner.get_table_attributes(%s);', (table_name,))
     atts = tuple([res[0] for res in curs.fetchall()])
     return atts
 
