@@ -5,7 +5,7 @@ import psycopg2
 import cmd
 from optparse import OptionGroup
 from script import DBScript
-from util_funcs import *
+from sql_util import *
 
 try:
     import readline
@@ -60,8 +60,7 @@ class DatePartitioner(DBScript):
         return parser    
     
     def validate_opts(self):
-        if self.opts.schema and len(self.args) == 0:
-            return
+        self.load_partitioner_schema()
             
         if len(self.args) < 2:
             self.parser.error("date_partitioner.py requires both a table name and timestamp field name on that table as arguments.")
@@ -171,7 +170,8 @@ class DatePartitioner(DBScript):
             if int(start) > int(self.opts.end):
                 break
             
-            if end < int(self.opts.end):
+            if str(end) < self.opts.end:
+                print 'here'
                 check_str = "CHECK (%s >= '%s' AND %s < '%s')" % (self.part_column, start, self.part_column, end)
             else:
                 check_str = "CHECK (%s >= '%s')" % (self.part_column, start)
@@ -200,6 +200,8 @@ class DatePartitioner(DBScript):
         idx_count = 0
         idx_re = re.compile(r'(create (?:unique )?index )(.*)', re.I)
         for idx in get_index_defs(self.curs, self.qualified_table_name):
+            if 'unique' in idx.lower() or 'primary' in idx.lower():
+                continue # we let constraint creation handle unique and primary keys
             idx_count += 1
             if idx.count(self.table_name) == 1: 
                 idx = re.sub(idx_re, r'\1%s_%%s_\2' % self.table_name, idx)
@@ -232,12 +234,9 @@ class DatePartitioner(DBScript):
 
     def get_constraintdefs(self):
         constraints = []
-        for constraint_def in get_constraint_defs(self.curs, self.qualified_table_name):
+        for constraint_def in get_constraint_defs(self.curs, self.qualified_table_name, self.opts.fkeys):
             constraints.append('ALTER TABLE %s_%%s ADD %s;' % (self.qualified_table_name, constraint_def))
 
-        if self.opts.fkeys:
-            for fkey_def in get_fkey_defs(self.curs, self.qualified_table_name):
-                constraints.append('ALTER TABLE %s_%%s ADD %s' % (self.qualified_table_name, fkey_def))
         return constraints
     
     def build_constraints(self):
@@ -396,8 +395,6 @@ class DatePartitioner(DBScript):
         
     def work(self):
         super(DatePartitioner, self).work()
-        
-        self.load_partitioner_schema()
         
         if self.args[0].find('.') > -1:
             self.qualified_table_name = self.args[0]

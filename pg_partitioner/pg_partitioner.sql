@@ -1,6 +1,18 @@
 DROP SCHEMA IF EXISTS pgpartitioner CASCADE;
 CREATE SCHEMA pgpartitioner;
 
+-- CREATE TABLE pgpartitioner.partitioned_tables (
+--     oid oid PRIMARY KEY,
+--     part_col text NOT NULL
+-- );
+-- 
+-- CREATE TABLE pgpartitioner.paritions (
+--     oid oid PRIMARY KEY,
+--     parent oid UNIQUE,
+--     start_val text NOT NULL,
+--     end_val text NOT NULL
+-- );
+
 CREATE OR REPLACE FUNCTION pgpartitioner.quote_nullable(val anyelement)
     RETURNS text AS $$
     SELECT COALESCE(quote_literal($1), 'NULL');
@@ -56,7 +68,7 @@ DECLARE
     column_type text;
     check_sql text;
 BEGIN
-    SELECT table_exists(table_name) INTO q_table_name;
+    SELECT pgpartitioner.table_exists(table_name) INTO q_table_name;
     IF q_table_name IS NULL THEN
         RAISE EXCEPTION 'Table % does not exist (at least not in the current search path).', table_name;
     END IF;
@@ -69,7 +81,7 @@ BEGIN
     INTO column_type;
     
     IF column_type IS NULL THEN
-        RAISE EXCEPTION 'Could not find column % on table %.', column_name, q_table_name;
+        RAISE EXCEPTION 'Column % does not exist on table %.', column_name, q_table_name;
     END IF;
     
     RETURN column_type;
@@ -77,20 +89,35 @@ END;
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION pgpartitioner.get_column_type (table_name text, column_name text) IS 'Returns the type of the specified column on the specified table';
 
-CREATE OR REPLACE FUNCTION pgpartitioner.get_table_constraint_defs(table_name text)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_table_constraint_defs(table_name text, fkeys boolean)
     RETURNS SETOF text AS $$
-    SELECT pg_get_constraintdef(c.oid)
-    FROM pg_constraint c
-    WHERE c.conrelid=$1::regclass
-$$ LANGUAGE sql;
-COMMENT ON FUNCTION pgpartitioner.get_table_constraint_defs (table_name text) IS 'Returns pg_get_constraintdef() string for each constraint on the specified table';
+DECLARE
+    q_table_name text;
+    constraints_sql text;
+    res text;
+BEGIN
+    SELECT pgpartitioner.table_exists(table_name) INTO q_table_name;
+    
+    constraints_sql := 'SELECT pg_get_constraintdef(c.oid) as con_def
+                        FROM pg_constraint c
+                        WHERE c.conrelid=' || quote_literal(q_table_name) || '::regclass';
+    IF NOT fkeys THEN
+        constraints_sql := constraints_sql || ' AND contype != ''f''';
+    END IF;
+    
+    FOR res IN EXECUTE constraints_sql
+    LOOP
+        RETURN NEXT res;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION pgpartitioner.get_table_constraint_defs (table_name text, fkeys boolean) IS 'Returns pg_get_constraintdef() string for each constraint on the specified table';
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_index_defs(table_name text)
     RETURNS SETOF text AS $$
     SELECT pg_get_indexdef(i.indexrelid) as def
     FROM pg_index i
     WHERE i.indrelid=$1::regclass
-        -- AND i.indisprimary IS NOT TRUE AND i.indisunique IS NOT TRUE
 $$ LANGUAGE sql;
 COMMENT ON FUNCTION pgpartitioner.get_table_index_defs (table_name text) IS 'Returns pg_get_indexdef() strings for each index on the specified table.';
 

@@ -9,7 +9,8 @@ pg_partitioner/pg_partitioner.py
 pg_partitioner/pg_partitioner.sql
 pg_partitioner/range_part_trig.tpl.sql
 pg_partitioner/script.py
-pg_partitioner/util_funcs.py
+pg_partitioner/sql_util.py
+pg_partitioner/table.py
 pg_partitioner.egg-info/PKG-INFO
 pg_partitioner.egg-info/SOURCES.txt
 pg_partitioner.egg-info/dependency_links.txt

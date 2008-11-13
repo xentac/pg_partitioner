@@ -13,3 +13,4 @@ Smaller items:
 * Change default unit for integer partitioning to 10% of range
 * Add (optional) vacuum step after migrate
 * Analyze tables after data migration
+* Test static v. dynamic partition triggers
