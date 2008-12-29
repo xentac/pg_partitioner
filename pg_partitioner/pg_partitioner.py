@@ -194,7 +194,7 @@ class DatePartitioner(DBScript):
                 self.curs.execute(create_part_sql % 
                         (partition, check_str, self.qualified_table_name, partition, self.qualified_table_name, vals_str))
             except psycopg2.ProgrammingError, e:
-                if e.message.strip().endswith('already exists'):
+                if e.pgerror.strip().endswith('already exists'):
                     self.curs.execute('ROLLBACK TO SAVEPOINT create_table_save;')
             
             start, end = (end, self.nextInterval(end))
@@ -236,7 +236,7 @@ class DatePartitioner(DBScript):
                 try:
                     self.curs.execute(idxs_str % ((partition_point,)*idx_count*2))
                 except psycopg2.ProgrammingError, e:
-                    if e.message.strip().endswith('already exists'):
+                    if e.pgerror.strip().endswith('already exists'):
                         self.curs.execute('ROLLBACK TO SAVEPOINT idx_create_save')
 
     def get_constraintdefs(self):
@@ -263,8 +263,8 @@ class DatePartitioner(DBScript):
                     try:
                         self.curs.execute(con % (partition_point,))
                     except psycopg2.ProgrammingError, e:
-                        m = e.message.strip()
-                        if m.strip().endswith('already existms') or m.startswith('multiple primary keys'):
+                        m = e.pgerror.strip()
+                        if m.strip().endswith('already exists') or m.startswith('ERROR:  multiple primary keys'):
                             self.curs.execute('ROLLBACK TO SAVEPOINT constraint_create_save')
         
     def set_trigger_func(self):
