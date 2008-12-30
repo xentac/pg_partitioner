@@ -1,9 +1,10 @@
 Bigger items:
 
+* Move from stage options to command based stages
 * Post stage should create triggers on child tables -- optional?
 * Switch to custom catalogs -- ?
 * Log actions + message verbosity controls -- no more print statements!
-* Partition management 
+* Partition management
 ** Ability to combine partitions
 ** Ability to delete partitions
 

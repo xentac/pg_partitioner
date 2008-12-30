@@ -1,17 +1,13 @@
 DROP SCHEMA IF EXISTS pgpartitioner CASCADE;
 CREATE SCHEMA pgpartitioner;
 
--- CREATE TABLE pgpartitioner.partitioned_tables (
---     oid oid PRIMARY KEY,
---     part_col text NOT NULL
--- );
--- 
--- CREATE TABLE pgpartitioner.paritions (
---     oid oid PRIMARY KEY,
---     parent oid UNIQUE,
---     start_val text NOT NULL,
---     end_val text NOT NULL
--- );
+DROP TABLE IF EXISTS pgpartitioner.partitions;
+CREATE TABLE pgpartitioner.partitions (
+    partition_oid oid PRIMARY KEY,
+    parent_oid oid,
+    partition_type text CHECK (partition_type IN ('range')),
+    vals text[]
+);
 
 CREATE OR REPLACE FUNCTION pgpartitioner.quote_nullable(val anyelement)
     RETURNS text AS $$
@@ -151,12 +147,12 @@ COMMENT ON FUNCTION pgpartitioner.column_is_indexed (column_name text, table_nam
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_partitions(text)
     RETURNS SETOF text AS $$
-    SELECT n.nspname || '.' || t.relname::text
-    FROM pg_class t, pg_namespace n, pg_inherits i
-    WHERE n.oid=t.relnamespace 
-        AND nspname || '.' || relname ~ ('^' || $1 || '_[0-9]+$')
-        AND t.oid=i.inhrelid AND i.inhparent = $1::regclass
-    ORDER BY relname
+    SELECT n.nspname || '.' || c.relname
+    FROM pgpartitioner.partitions p, pg_class c, pg_namespace n
+    WHERE p.parent_oid = $1::regclass
+        AND p.partition_oid = c.oid
+        AND c.relnamespace = n.oid
+    ORDER BY c.relname
 $$ LANGUAGE sql;
 COMMENT ON FUNCTION pgpartitioner.get_partitions (text) IS 'Returns all partitions of the specified table as text.';
 
@@ -168,10 +164,9 @@ CREATE OR REPLACE FUNCTION pgpartitioner.get_partition_parent(text)
         AND t.oid=i.inhparent AND i.inhrelid = $1::regclass
 $$ LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION pgpartitioner.get_partition_points(table_name text)
-    RETURNS SETOF text AS $$
-    SELECT split_part(s.part, '_', array_upper(string_to_array(s.part, '_'), 1))
-    FROM pgpartitioner.get_partitions($1) s(part)
+CREATE OR REPLACE FUNCTION pgpartitioner.get_partition_bounds(partition_name text)
+    RETURNS text[] AS $$
+    SELECT vals from pgpartitioner.partitions where partition_oid=$1::regclass
 $$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION pgpartitioner.get_table_pkey_fields(table_name text)
@@ -223,8 +218,6 @@ DECLARE
     offset integer;
 BEGIN
     SELECT * FROM pgpartitioner.get_table_pkey_fields(src_tbl) INTO pkey_fields;
-    SELECT ARRAY(SELECT * FROM pgpartitioner.get_partition_points(pgpartitioner.get_partition_parent(dst_tbl)))
-        INTO partition_points;
     
     -- make the returning clause
     FOR i IN 1..array_upper(pkey_fields, 1)
@@ -232,15 +225,7 @@ BEGIN
         pkey_fields_conv[i] := pkey_fields[i] || '::text';
     END LOOP;
     
-    bounds[1] := substring(dst_tbl from '_([0-9]*)$');
-    raise notice 'bounds: %', bounds[1];
-    FOR i IN 1..array_upper(partition_points, 1)-1
-    LOOP
-        IF bounds[1] = partition_points[i] THEN
-            bounds[2] := partition_points[i+1];
-            EXIT;
-        END IF;
-    END LOOP;
+    SELECT * FROM pgpartitioner.get_partition_bounds(dst_tbl) INTO bounds;
     
     offset := 0;
     LOOP

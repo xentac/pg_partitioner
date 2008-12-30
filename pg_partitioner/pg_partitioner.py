@@ -162,6 +162,10 @@ class DatePartitioner(DBScript):
         CREATE TABLE %s (
             %s
         ) INHERITS (%s);
+        INSERT INTO pgpartitioner.partitions
+        (partition_oid, parent_oid, partition_type, vals)
+        VALUES
+        ('%s'::regclass, '%s'::regclass, 'range', ARRAY[%s])
         '''
         
         start, end = (self.opts.start, self.nextInterval(self.opts.start))
@@ -170,11 +174,10 @@ class DatePartitioner(DBScript):
             if int(start) > int(self.opts.end):
                 break
             
-            if str(end) < self.opts.end:
-                print 'here'
-                check_str = "CHECK (%s >= '%s' AND %s < '%s')" % (self.part_column, start, self.part_column, end)
-            else:
-                check_str = "CHECK (%s >= '%s')" % (self.part_column, start)
+            # if str(end) < self.opts.end:
+            # check_str = "CHECK (%s >= '%s' AND %s < '%s')" % (self.part_column, start, self.part_column, end)
+            # else:
+            #      check_str = "CHECK (%s >= '%s')" % (self.part_column, start)
                 
             partition = '%s_%s' % (self.qualified_table_name, start)
             if partition in self.partitions:
@@ -185,15 +188,19 @@ class DatePartitioner(DBScript):
             try:
                 self.curs.execute('SAVEPOINT create_table_save;')
                     
+                check_str = "CHECK (%s >= '%s' AND %s < '%s')" % (self.part_column, start, self.part_column, end)
+                vals_str = "'"+"','".join([start, end])+"'"
                 print 'Creating %s...' % partition
                 self.curs.execute(create_part_sql % 
-                        (partition, check_str, self.qualified_table_name))
+                        (partition, check_str, self.qualified_table_name, partition, self.qualified_table_name, vals_str))
             except psycopg2.ProgrammingError, e:
                 if e.message.strip().endswith('already exists'):
                     self.curs.execute('ROLLBACK TO SAVEPOINT create_table_save;')
             
             start, end = (end, self.nextInterval(end))
             self.partitions.append(partition)
+            
+        self.load_templated_funcs()
 
     def get_indexdefs_str(self):
         idxs_sql = ''
@@ -356,14 +363,11 @@ class DatePartitioner(DBScript):
                 break
         
         self.check_referencing_fkeys()
-        self.load_templated_funcs()
             
         self.curs.execute(move_down_sql % d)
         moved = self.curs.fetchone()[0]
         print 'Moved %d rows into partitions.' % moved
-        
-        # self.curs.execute('TRUNCATE %s;' % self.qualified_table_name)
-    
+            
     def read_file(self, tpl):
         tpl_path = os.path.dirname(os.path.realpath(__file__))
         return open(tpl_path+'/'+tpl).read()

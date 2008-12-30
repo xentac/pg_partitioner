@@ -176,12 +176,61 @@ class TestDatePartitioner(dbtestcase.DBTestCase):
         
         sql = "SELECT COUNT(*) FROM ONLY foo;"
         self.exec_query(sql)
-        self.assertEqual(self.cursor().fetchone()[0], 3)
+        self.assertEqual(self.cursor().fetchone()[0], 4)
         
         output = p.stdout.read()
-        self.assertNotEqual(output.find('Moved 4 rows into partitions.'), -1)
-        # self.assertNotEqual(output.find('Kept 3 rows in the parent table.'), -1)
+        self.assertNotEqual(output.find('Moved 3 rows into partitions.'), -1)
     
+    def testInsertGoesToCorrectTable(self):
+        cmd = script+" foo val_ts --stage create"
+        self.callproc(cmd)
+        
+        cmd = script+" foo val_ts --stage post"
+        self.callproc(cmd)
+        
+        total_sql = "SELECT COUNT(*) FROM foo;"
+        self.exec_query(total_sql)
+        total = self.cursor().fetchone()[0]
+        print total
+        
+        only_sql = "SELECT COUNT(*) FROM ONLY foo;"
+        self.exec_query(only_sql)
+        only = self.cursor().fetchone()[0]
+        print only
+        
+        sql = "INSERT INTO foo (val, val_ts) VALUES (50, '20001010');"
+        self.exec_query(sql)
+        
+        self.exec_query(total_sql)
+        self.assertEqual(total+1, self.cursor().fetchone()[0])
+        total += 1
+        print total
+        
+        self.exec_query(only_sql)
+        self.assertEqual(only+1, self.cursor().fetchone()[0])
+        only += 1
+        
+        sql = "INSERT INTO foo (val, val_ts) VALUES (60, '20080622');"
+        self.exec_query(sql)
+        
+        self.exec_query(total_sql)
+        self.assertEqual(total+1, self.cursor().fetchone()[0])
+        total += 1
+        
+        self.exec_query(only_sql)
+        self.assertEqual(only, self.cursor().fetchone()[0])
+        
+        sql = "INSERT INTO foo (val, val_ts) VALUES (70, '20101010');"
+        self.exec_query(sql)
+        
+        self.exec_query(total_sql)
+        self.assertEqual(total+1, self.cursor().fetchone()[0])
+        total += 1
+        
+        self.exec_query(only_sql)
+        self.assertEqual(only+1, self.cursor().fetchone()[0])
+        only += 1
+        
     def testRunWithTestFlagDoesntCommit(self):
         cmd = script+" -u month -t foo val_ts"
         sts, p = self.callproc(cmd)
