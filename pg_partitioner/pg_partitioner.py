@@ -139,7 +139,7 @@ class DatePartitioner(DBScript):
             self.opts.start = normalize_date(self.curs, self.opts.start, 'YYYYMMDD', units)
             self.opts.units = str(self.opts.scale) + ' ' + units
         elif self.short_type == 'int':
-            self.opts.start = units * (self.opts.start/units)
+            self.opts.start = units * (int(self.opts.start)/units)
             self.opts.units = str(self.opts.scale * units)
         
         self.opts.end = self.opts.end or res[1]
