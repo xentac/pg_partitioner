@@ -189,7 +189,7 @@ class DatePartitioner(DBScript):
                 self.curs.execute('SAVEPOINT create_table_save;')
                     
                 check_str = "CHECK (%s >= '%s' AND %s < '%s')" % (self.part_column, start, self.part_column, end)
-                vals_str = "'"+"','".join([start, end])+"'"
+                vals_str = "'%s','%s'" % (start, end)
                 print 'Creating %s...' % partition
                 self.curs.execute(create_part_sql % 
                         (partition, check_str, self.qualified_table_name, partition, self.qualified_table_name, vals_str))
